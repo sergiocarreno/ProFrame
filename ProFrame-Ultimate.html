@@ -1,0 +1,1890 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>ProFrame Estimator</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:#0b0e13;font-family:'Segoe UI',system-ui,sans-serif;color:#dde3ef;}
+select option{background:#1a2030;color:#dde3ef;}
+input[type=number]::-webkit-inner-spin-button{opacity:.4;}
+::-webkit-scrollbar{width:6px;height:6px;}
+::-webkit-scrollbar-track{background:#13181f;}
+::-webkit-scrollbar-thumb{background:#263045;border-radius:3px;}
+@media print{
+  #nav,#topbar,.no-print{display:none!important;}
+  body{background:#fff;color:#000;}
+  .print-doc{box-shadow:none!important;}
+}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.23.5/babel.min.js"></script>
+<script type="text/babel">
+const { useState, useEffect, useCallback, useRef } = React;
+
+// ============================================================
+// CONSTANTS
+// ============================================================
+const C = {
+  bg:"#0b0e13", sur:"#13181f", sur2:"#1a2030", sur3:"#202840",
+  brd:"#263045", acc:"#f0a020", acc2:"#e04520", txt:"#dde3ef",
+  mut:"#5a6880", grn:"#1db86a", red:"#e04545", blu:"#3a7bd5"
+};
+
+const DEFAULT_PRICES = {
+  stud2x6: 11.50, stud2x4: 8.50, plate2x6: 14.50, plate2x4: 11.00,
+  pt_sill: 18.00, bracing: 11.00, fire_block: 6.50,
+  osb_wall: 22.00, osb_roof: 22.00, osb_floor: 44.00,
+  housewrap: 68.00, bridging: 9.00,
+  lvl_9: 420, lvl_11: 576, lvl_14: 720, lvl_16: 900,
+  psl: 850, steel: 1200,
+  tji: 28.00, rim_board: 72.00,
+  truss: 185.00, rafter: 22.00, ridge: 22.00, collar: 8.50,
+  fascia: 24.00, fascia10: 28.00, subfascia: 14.50,
+  soffit: 32.00, barge: 30.00, frieze: 16.00, corner_bd: 12.00,
+  nail_box: 58.00, screw_box: 28.00, h25: 2.80, lus210: 1.85,
+  hd2a: 24.00, post_cap: 18.00, anchor_bolt: 2.20,
+  pl400: 7.50, beam_hw: 42.00, misc_tie: 3.50,
+  hdr_8: 20, hdr_10: 28, hdr_12: 34
+};
+
+const SAMPLE_PROJECT = {
+  totalSF:"2400", stories:"2",
+  extLF1:"160", extH1:"9", extLF2:"140", extH2:"8", extLF3:"",
+  extSize:"2x6", extOC:"16",
+  corners:"8", tWalls:"14", windows:"18", extDoors:"4", intDoors:"16",
+  intLF1:"240", intLF2:"220", intLF3:"",
+  intOC:"16", bearingLF:"40", vaultedLF:"", vaultedH:"12",
+  fpSF1:"1200", fpSF2:"1100", fpPerim1:"140", fpPerim2:"130",
+  fjSize:"2x10", fjOC:"16", tjiSize:"", tjiQty:"", tjiSpacing:'16"',
+  roofType:"truss", roofFP:"1300", pitch:"6",
+  trussSpan:"30", trussQty:"56", trussSpacing:'24"',
+  rafterSize:"2x10", rafterOC:"16", ridgeSize:"2x10",
+  overhang:"24",
+  fasciaLF:"", fasciaSize:"1x8", subfasciaLF:"", subfasciaSize:"6",
+  soffitLF:"", soffitW:"2", bargeLF:"40", bargeSize:"1x10",
+  friezeLF:"", friezeSize:"1x6", cornerBoard:"1x4",
+  lvls:[
+    {id:"a1", size:"3.5x11.25 LVL", length:"18", qty:"2", location:"Main floor beam"},
+    {id:"a2", size:"1.75x9.5 LVL",  length:"12", qty:"4", location:"Window headers"},
+    {id:"a3", size:"3.5x14 LVL",    length:"24", qty:"1", location:"Garage header"}
+  ],
+  psls:[], steels:[],
+  headers:[
+    {id:"h1", size:"2x12", qty:"6", location:"Exterior openings"},
+    {id:"h2", size:"2x10", qty:"8", location:"Interior openings"}
+  ],
+  stairRuns:[{id:"s1", risers:"14", width:"3", landingLF:"3"}],
+  laborType:"my-crew", laborRate:"13", subRate:"10", subMarkup:"2.50",
+  profitMode:"pct", profitPct:"22", profitSF:"5",
+  dep:"10", with_:"10",
+  scope:"Supply all labor and materials for complete structural framing of new 2-story residential construction per approved plans and Michigan building code, including all rough framing, engineered lumber, roof trusses, stair framing, and finish lumber as specified.",
+  terms:"All work performed per Michigan Residential Code (2021 MRC) and approved plans. Owner responsible for permits unless otherwise specified. Contractor not responsible for delays due to weather, owner, or inspector. Changes require written change order prior to work. Retainage released within 5 business days of passed framing inspection. Contractor carries general liability and workers compensation insurance."
+};
+
+const uid = () => Math.random().toString(36).slice(2, 9);
+const num = v => parseFloat(v) || 0;
+const fmt = n => Number(n||0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
+const $ = n => "$" + fmt(n);
+const wlbl = h => ({8:'92-5/8"', 9:'104-5/8"', 10:'116-5/8"'}[String(h)] || h + ' ft');
+
+// ============================================================
+// LOCALSTORAGE
+// ============================================================
+const LS_KEY = "proframe_v3";
+function loadLS() {
+  try {
+    const raw = localStorage.getItem(LS_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch(e) { return null; }
+}
+function saveLS(data) {
+  try { localStorage.setItem(LS_KEY, JSON.stringify(data)); } catch(e) {}
+}
+
+// ============================================================
+// BASE UI COMPONENTS (ALL AT MODULE LEVEL - NO INNER COMPONENTS)
+// ============================================================
+const iS = (extra={}) => ({
+  width:"100%", background:C.sur2, border:"1px solid " + C.brd,
+  borderRadius:8, padding:"9px 12px", color:C.txt, fontSize:14,
+  outline:"none", fontFamily:"inherit", boxSizing:"border-box", ...extra
+});
+
+function Btn({v="pri", sz="md", onClick, children, style={}, disabled=false}) {
+  const pad = sz==="sm" ? {padding:"5px 13px",fontSize:12}
+    : sz==="lg" ? {padding:"12px 28px",fontSize:15}
+    : {padding:"9px 20px",fontSize:14};
+  const col = v==="pri" ? {background:C.acc,color:"#000"}
+    : v==="grn" ? {background:C.grn,color:"#000"}
+    : v==="red" ? {background:C.red,color:"#fff"}
+    : v==="ghost" ? {background:"none",color:C.mut,border:"1px solid "+C.brd}
+    : {background:C.sur3,color:C.txt,border:"1px solid "+C.brd};
+  return (
+    <button onClick={disabled ? undefined : onClick} disabled={disabled}
+      style={{display:"inline-flex",alignItems:"center",gap:6,border:"none",
+        cursor:disabled?"not-allowed":"pointer",fontFamily:"inherit",fontWeight:700,
+        borderRadius:8,opacity:disabled?0.5:1,...pad,...col,...style}}>
+      {children}
+    </button>
+  );
+}
+
+function Inp({label, value, onChange, type="text", placeholder="", readOnly=false, suffix, tip, err}) {
+  return (
+    <div style={{marginBottom:13}}>
+      {label && (
+        <label style={{display:"block",fontSize:11,fontWeight:700,color:err?C.red:C.mut,
+          textTransform:"uppercase",letterSpacing:.5,marginBottom:5}}>
+          {label}{tip && <span style={{color:C.mut,fontWeight:400,marginLeft:6,textTransform:"none",fontSize:10}}>({tip})</span>}
+        </label>
+      )}
+      <div style={{position:"relative"}}>
+        <input type={type} value={value} onChange={e=>onChange(e.target.value)}
+          placeholder={placeholder} readOnly={readOnly}
+          style={{...iS(), border:"1px solid "+(err?C.red:C.brd), opacity:readOnly?.55:1, paddingRight:suffix?38:12}}/>
+        {suffix && <span style={{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)",color:C.mut,fontSize:12,pointerEvents:"none"}}>{suffix}</span>}
+      </div>
+      {err && <div style={{fontSize:11,color:C.red,marginTop:3}}>{err}</div>}
+    </div>
+  );
+}
+
+function Sel({label, value, onChange, options, tip}) {
+  return (
+    <div style={{marginBottom:13}}>
+      {label && (
+        <label style={{display:"block",fontSize:11,fontWeight:700,color:C.mut,
+          textTransform:"uppercase",letterSpacing:.5,marginBottom:5}}>
+          {label}{tip && <span style={{color:C.mut,fontWeight:400,marginLeft:6,textTransform:"none",fontSize:10}}>({tip})</span>}
+        </label>
+      )}
+      <select value={value} onChange={e=>onChange(e.target.value)} style={iS()}>
+        {options.map(o => <option key={o.value !== undefined ? o.value : o} value={o.value !== undefined ? o.value : o}>{o.label !== undefined ? o.label : o}</option>)}
+      </select>
+    </div>
+  );
+}
+
+function Txt({label, value, onChange, rows=3, placeholder=""}) {
+  return (
+    <div style={{marginBottom:13}}>
+      {label && <label style={{display:"block",fontSize:11,fontWeight:700,color:C.mut,textTransform:"uppercase",letterSpacing:.5,marginBottom:5}}>{label}</label>}
+      <textarea rows={rows} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder}
+        style={{...iS(), resize:"vertical", minHeight:70}}/>
+    </div>
+  );
+}
+
+function Card({children, style={}}) {
+  return <div style={{background:C.sur,border:"1px solid "+C.brd,borderRadius:12,padding:20,marginBottom:16,...style}}>{children}</div>;
+}
+
+function CardTitle({children}) {
+  return <div style={{fontWeight:800,fontSize:12,textTransform:"uppercase",letterSpacing:.5,color:C.acc,marginBottom:14}}>{children}</div>;
+}
+
+function Badge({label, color="blu"}) {
+  const map = {blu:[C.blu+"28",C.blu],grn:[C.grn+"28",C.grn],yel:[C.acc+"28",C.acc],red:[C.red+"28",C.red]};
+  const [bg,fg] = map[color] || map.blu;
+  return <span style={{background:bg,color:fg,padding:"2px 9px",borderRadius:20,fontSize:11,fontWeight:700,textTransform:"uppercase",letterSpacing:.5}}>{label}</span>;
+}
+
+function Stat({value, label, accent}) {
+  return (
+    <div style={{background:C.sur2,border:"1px solid "+(accent?C.acc:C.brd),borderRadius:10,padding:16,textAlign:"center"}}>
+      <div style={{fontWeight:900,fontSize:22,color:accent?C.acc:C.txt}}>{value}</div>
+      <div style={{fontSize:11,color:C.mut,textTransform:"uppercase",letterSpacing:.5,marginTop:3}}>{label}</div>
+    </div>
+  );
+}
+
+function Hr() { return <hr style={{border:"none",borderTop:"1px solid "+C.brd,margin:"16px 0"}}/>; }
+
+function BackBtn({onClick, label}) {
+  return (
+    <button onClick={onClick}
+      style={{background:"none",border:"none",color:C.mut,cursor:"pointer",fontFamily:"inherit",
+        fontSize:13,padding:"6px 0",marginBottom:14,display:"flex",alignItems:"center",gap:5}}>
+      {label || "<-- Back"}
+    </button>
+  );
+}
+
+function G2({children, style={}}) {
+  return <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,...style}}>{children}</div>;
+}
+function G3({children}) {
+  return <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:16}}>{children}</div>;
+}
+function G4({children}) {
+  return <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:16}}>{children}</div>;
+}
+
+// Module-level BeamRow
+function BeamRow({item, onSet, onRm, sizeOptions}) {
+  return (
+    <div style={{display:"flex",gap:8,marginBottom:8,flexWrap:"wrap",alignItems:"flex-start"}}>
+      <div style={{flex:"0 0 185px"}}>
+        <select value={item.size} onChange={e=>onSet(item.id,"size",e.target.value)} style={iS()}>
+          {sizeOptions.map(o => <option key={o} value={o}>{o}</option>)}
+        </select>
+      </div>
+      <div style={{flex:"0 0 88px"}}>
+        <input value={item.length} onChange={e=>onSet(item.id,"length",e.target.value)} placeholder="Len (ft)" type="number" style={iS()}/>
+      </div>
+      <div style={{flex:"0 0 65px"}}>
+        <input value={item.qty} onChange={e=>onSet(item.id,"qty",e.target.value)} placeholder="Qty" type="number" style={iS()}/>
+      </div>
+      <div style={{flex:1,minWidth:120}}>
+        <input value={item.location} onChange={e=>onSet(item.id,"location",e.target.value)} placeholder="Location" style={iS()}/>
+      </div>
+      <Btn v="red" sz="sm" onClick={()=>onRm(item.id)}>X</Btn>
+    </div>
+  );
+}
+
+// Module-level StairRow
+function StairRow({run, idx, total, onChange, onRemove}) {
+  return (
+    <Card style={{background:C.sur2}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+        <strong style={{fontSize:13}}>Stair Run {idx+1}</strong>
+        {total > 1 && <Btn v="red" sz="sm" onClick={onRemove}>Remove</Btn>}
+      </div>
+      <G3>
+        <Inp label="Risers" value={run.risers} onChange={v=>onChange("risers",v)} type="number" placeholder="e.g. 14" tip="total steps"/>
+        <Inp label="Stair Width" value={run.width} onChange={v=>onChange("width",v)} type="number" placeholder="3" suffix="ft"/>
+        <Inp label="Landing LF" value={run.landingLF} onChange={v=>onChange("landingLF",v)} type="number" placeholder="0"/>
+      </G3>
+      {run.risers && (
+        <div style={{fontSize:12,color:C.mut}}>
+          {"--> "}{num(run.width)<=3?3:4} pcs 2x12 stringers, {run.risers} treads, {run.risers} risers
+        </div>
+      )}
+    </Card>
+  );
+}
+
+// ============================================================
+// CALC ENGINE
+// ============================================================
+function calcMaterials(d, P) {
+  const cats = [];
+  function addCat(name, items) {
+    const sub = items.reduce((s,i) => s + num(i.qty)*num(i.cost), 0);
+    cats.push({name, items, sub});
+  }
+
+  const extLF = [num(d.extLF1), num(d.extLF2), num(d.extLF3)];
+  const extH  = [num(d.extH1)||8, num(d.extH2)||8, num(d.extH3)||8];
+  const totalExtLF = extLF.reduce((a,b)=>a+b,0);
+  const extOC = d.extOC==="24" ? 24 : 16;
+  const sw = d.extSize==="2x4" ? "2x4" : "2x6";
+  const sCost = sw==="2x6" ? P.stud2x6 : P.stud2x4;
+  const pCost = sw==="2x6" ? P.plate2x6 : P.plate2x4;
+  const corners = num(d.corners);
+  const tWalls  = num(d.tWalls);
+  const wins    = num(d.windows);
+  const extDrs  = num(d.extDoors);
+  const intDrs  = num(d.intDoors);
+  const extWallSF = extLF.reduce((s,lf,i) => s + lf*extH[i], 0);
+
+  // -- EXTERIOR WALLS --
+  const ewItems = [];
+  extLF.forEach((lf,i) => {
+    if (!lf) return;
+    // Studs: LF x (12/OC) x 1.15 waste (Grok-recommended)
+    const qty = Math.ceil(lf * (12/extOC) * 1.15);
+    ewItems.push({desc:sw+"x"+wlbl(extH[i])+" Ext Studs Floor "+(i+1)+" ("+extOC+'" OC)', qty, unit:"pcs", cost:sCost});
+  });
+  if (totalExtLF > 0) {
+    // Plates: total LF x 3 (btm + dbl top) x 1.10
+    ewItems.push({desc:sw+"x16' Ext Wall Plates (btm + dbl top)", qty:Math.ceil(totalExtLF*3*1.10/16), unit:"pcs", cost:pCost});
+    ewItems.push({desc:"2x4x16' Diagonal Bracing Studs (1 per 25 LF)", qty:Math.ceil(totalExtLF/25), unit:"pcs", cost:P.bracing});
+    ewItems.push({desc:"PT "+sw+"x16' Sill Plate Floor 1", qty:Math.ceil(extLF[0]/16*1.08), unit:"pcs", cost:P.pt_sill});
+    ewItems.push({desc:"7/16\" OSB Wall Sheathing (1.12 waste)", qty:Math.ceil(extWallSF/32*1.12), unit:"sheets", cost:P.osb_wall});
+    ewItems.push({desc:"Housewrap/Weather Barrier", qty:Math.max(1,Math.ceil(extWallSF/900)), unit:"rolls", cost:P.housewrap});
+    ewItems.push({desc:"2x4x8' Fire Blocking", qty:Math.ceil(totalExtLF/8), unit:"pcs", cost:P.fire_block});
+  }
+  if (corners > 0) ewItems.push({desc:sw+" Corner Backing Studs ("+corners+" corners x 3)", qty:Math.ceil(corners*3*1.05), unit:"pcs", cost:sCost});
+  if (tWalls > 0)  ewItems.push({desc:sw+" T-Wall Drywall Backers ("+tWalls+" x 2)", qty:Math.ceil(tWalls*2*1.05), unit:"pcs", cost:sCost});
+  if (wins+extDrs > 0) {
+    ewItems.push({desc:sw+" King & Jack Studs - Windows/Ext Doors", qty:Math.ceil((wins*4+extDrs*4)*1.05), unit:"pcs", cost:sCost});
+    ewItems.push({desc:sw+" Cripple Studs - Windows/Ext Doors", qty:Math.ceil((wins*4+extDrs*2)*1.05), unit:"pcs", cost:sCost});
+  }
+  if (ewItems.length) addCat("Exterior Walls", ewItems);
+
+  // -- INTERIOR WALLS --
+  const intLF = [num(d.intLF1), num(d.intLF2), num(d.intLF3)];
+  const totalIntLF = intLF.reduce((a,b)=>a+b,0);
+  const intOC = d.intOC==="24" ? 24 : 16;
+  const bearLF = num(d.bearingLF);
+  const iwItems = [];
+  intLF.forEach((lf,i) => {
+    if (!lf) return;
+    iwItems.push({desc:"2x4x"+wlbl(extH[i])+" Int Studs Floor "+(i+1)+" ("+intOC+'" OC)', qty:Math.ceil(lf*(12/intOC)*1.15), unit:"pcs", cost:P.stud2x4});
+  });
+  if (totalIntLF > 0) iwItems.push({desc:"2x4x16' Int Wall Plates (btm + dbl top)", qty:Math.ceil(totalIntLF*3*1.10/16), unit:"pcs", cost:P.plate2x4});
+  if (intDrs > 0) iwItems.push({desc:"2x4 King & Jack Studs - Int Doors", qty:Math.ceil(intDrs*2*1.05), unit:"pcs", cost:P.stud2x4});
+  if (bearLF > 0) {
+    iwItems.push({desc:"2x6x"+wlbl(extH[0])+" Bearing Wall Studs", qty:Math.ceil(bearLF*(12/16)*1.15), unit:"pcs", cost:P.stud2x6});
+    iwItems.push({desc:"2x6x16' Bearing Wall Plates", qty:Math.ceil(bearLF*3*1.10/16), unit:"pcs", cost:P.plate2x6});
+  }
+  const vLF = num(d.vaultedLF), vH = num(d.vaultedH)||12;
+  if (vLF > 0) {
+    iwItems.push({desc:sw+"x"+vH+"' Tall/Vaulted Studs", qty:Math.ceil(vLF*(12/extOC)*1.15), unit:"pcs", cost:sCost*1.4});
+    iwItems.push({desc:sw+"x16' Vaulted Wall Plates", qty:Math.ceil(vLF*3*1.10/16), unit:"pcs", cost:pCost});
+  }
+  if (iwItems.length) addCat("Interior Walls", iwItems);
+
+  // -- HEADERS --
+  const hItems = [];
+  (d.headers||[]).filter(h=>h.qty&&h.size).forEach(h => {
+    const c = h.size.includes("12")?P.hdr_12:h.size.includes("10")?P.hdr_10:P.hdr_8;
+    hItems.push({desc:h.size+" Header - "+(h.location||"opening"), qty:num(h.qty), unit:"pcs", cost:c});
+  });
+  if (!hItems.length && wins+extDrs+intDrs > 0) {
+    const tot = wins+extDrs+intDrs;
+    hItems.push({desc:"2x12x16' Headers (estimated)", qty:Math.ceil(tot/3), unit:"pcs", cost:P.hdr_12});
+    hItems.push({desc:"2x10x16' Headers (estimated)", qty:Math.ceil(tot/2), unit:"pcs", cost:P.hdr_10});
+  }
+  if (hItems.length) addCat("Headers (Dimensional)", hItems);
+
+  // -- ENGINEERED LUMBER --
+  const engItems = [];
+  (d.lvls||[]).filter(l=>l.qty&&l.length).forEach(l => {
+    const dp = parseFloat((l.size.match(/x(\d+\.?\d*)/) || [])[1]) || 9.5;
+    const base = dp>=14?P.lvl_14:dp>=11?P.lvl_11:dp>=9.5?P.lvl_9:P.lvl_9;
+    engItems.push({desc:l.size+" LVL "+l.length+"' - "+(l.location||"beam"), qty:num(l.qty), unit:"pcs", cost:base*(num(l.length)/16)});
+  });
+  (d.psls||[]).filter(l=>l.qty&&l.length).forEach(l => {
+    engItems.push({desc:l.size+" PSL "+l.length+"' - "+(l.location||"beam"), qty:num(l.qty), unit:"pcs", cost:P.psl*(num(l.length)/16)});
+  });
+  (d.steels||[]).filter(l=>l.qty&&l.length).forEach(l => {
+    engItems.push({desc:l.size+" Steel "+l.length+"' - "+(l.location||"beam"), qty:num(l.qty), unit:"pcs", cost:P.steel*(num(l.length)/16)});
+  });
+  if (d.tjiSize && num(d.tjiQty) > 0) {
+    engItems.push({desc:d.tjiSize+" TJI Floor Joists "+(d.tjiSpacing||'16"')+" OC", qty:num(d.tjiQty), unit:"pcs", cost:P.tji});
+    const rimLF = num(d.fpPerim1)+num(d.fpPerim2);
+    if (rimLF > 0) engItems.push({desc:'1-3/4" LVL Rim Board', qty:Math.ceil(rimLF/16*1.05), unit:"pcs (16')", cost:P.rim_board});
+  }
+  if (engItems.length) addCat("Engineered Lumber (LVL/PSL/TJI/Steel)", engItems);
+
+  // -- FLOOR --
+  const fp = [num(d.fpSF1), num(d.fpSF2), num(d.fpSF3)];
+  const totalFP = fp.reduce((a,b)=>a+b, 0);
+  const fjItems = [];
+  if (!d.tjiSize || !num(d.tjiQty)) {
+    const fjSz = d.fjSize||"2x10", fjOC = num(d.fjOC)||16;
+    fp.forEach((sf,i) => {
+      if (!sf) return;
+      fjItems.push({desc:fjSz+"x16' Floor Joists Floor "+(i+1)+" ("+fjOC+'" OC)', qty:Math.ceil(Math.sqrt(sf)*2/(fjOC/12)*1.10), unit:"pcs", cost:20});
+    });
+  }
+  if (totalFP > 0) {
+    fjItems.push({desc:"2x8 Bridging/Blocking", qty:Math.ceil(totalFP/48), unit:"pcs", cost:P.bridging});
+    fjItems.push({desc:'3/4" T&G OSB Subfloor (glued & nailed)', qty:Math.ceil(totalFP/32*1.10), unit:"sheets", cost:P.osb_floor});
+  }
+  if (fjItems.length) addCat("Floor System", fjItems);
+
+  // -- ROOF --
+  const roofFP = num(d.roofFP) || fp[0] || 0;
+  const pitch = num(d.pitch)||6;
+  const pf = Math.sqrt(1+(pitch/12)*(pitch/12));
+  const roofSF = roofFP * pf * 1.10;
+  const perim = totalExtLF || Math.sqrt(roofFP)*4;
+  const rItems = [];
+  if (d.roofType==="stick") {
+    const rs = d.rafterSize||"2x10", rOC = num(d.rafterOC)||16;
+    const rQty = Math.ceil(perim/(rOC/12)*1.10);
+    rItems.push({desc:rs+" Rafters "+rOC+'" OC', qty:rQty, unit:"pcs", cost:P.rafter});
+    rItems.push({desc:(d.ridgeSize||"2x10")+"x16' Ridge Board", qty:Math.ceil(Math.sqrt(roofFP)*.9/16), unit:"pcs", cost:P.ridge});
+    rItems.push({desc:"2x6 Collar Ties", qty:Math.ceil(rQty/3), unit:"pcs", cost:P.collar});
+  } else {
+    const tQty = num(d.trussQty) || Math.ceil(Math.sqrt(roofFP)*2/(16/12));
+    if (tQty > 0) rItems.push({desc:"Roof Trusses "+(d.trussSpan||"?")+"' span "+(d.trussSpacing||'24"')+" OC", qty:tQty, unit:"pcs", cost:P.truss});
+    rItems.push({desc:"2x6x16' Gable End Studs & Blocking", qty:Math.ceil(roofFP/80), unit:"pcs", cost:P.stud2x4});
+    rItems.push({desc:"2x4x8' Outriggers (gable overhang)", qty:Math.ceil(perim/4), unit:"pcs", cost:P.fire_block});
+  }
+  if (roofSF > 0) rItems.push({desc:'7/16" OSB Roof Sheathing (1.10 waste)', qty:Math.ceil(roofSF/32), unit:"sheets", cost:P.osb_roof});
+  if (rItems.length) addCat("Roof Framing", rItems);
+
+  // -- FINISH LUMBER --
+  const fascLF = num(d.fasciaLF) || perim;
+  const sfLF   = num(d.subfasciaLF) || perim;
+  const softLF = num(d.soffitLF) || perim;
+  const softW  = num(d.soffitW) || 2;
+  const bargeLF= num(d.bargeLF) || 0;
+  const friezeLF=num(d.friezeLF)|| perim;
+  const fItems = [];
+  if (fascLF>0) fItems.push({desc:(d.fasciaSize||"1x8")+" Fascia Board", qty:Math.ceil(fascLF/16*1.08), unit:"pcs (16')", cost:(d.fasciaSize||"1x8").includes("10")?P.fascia10:P.fascia});
+  if (sfLF>0)   fItems.push({desc:"2x"+(d.subfasciaSize||"6")+"x16' Sub-Fascia", qty:Math.ceil(sfLF/16*1.08), unit:"pcs", cost:P.subfascia});
+  if (softLF>0&&softW>0) fItems.push({desc:"Soffit "+Math.round(softW*12)+'" wide', qty:Math.ceil(softLF*softW/32*1.08), unit:"sheets/panels", cost:P.soffit});
+  if (bargeLF>0) fItems.push({desc:(d.bargeSize||"1x10")+" Barge/Rake Board", qty:Math.ceil(bargeLF/16*1.08), unit:"pcs (16')", cost:P.barge});
+  if (friezeLF>0) fItems.push({desc:(d.friezeSize||"1x6")+" Frieze Board", qty:Math.ceil(friezeLF/16*1.08), unit:"pcs (16')", cost:P.frieze});
+  if (corners>0 && d.cornerBoard && d.cornerBoard!=="none") {
+    const bldgH = (extH[0]+extH[1]+extH[2]) || 8;
+    fItems.push({desc:(d.cornerBoard)+" Corner Boards", qty:Math.ceil(corners*bldgH/16*2*1.08), unit:"pcs (16')", cost:P.corner_bd});
+  }
+  if (fItems.length) addCat("Fascia, Soffit & Finish Lumber", fItems);
+
+  // -- STAIRS --
+  const stItems = [];
+  (d.stairRuns||[]).filter(s=>s.risers).forEach((s,i) => {
+    const r = num(s.risers), w = num(s.width)||3;
+    const sc = w<=3?3:4;
+    const runLen = Math.ceil(r*0.9);
+    stItems.push({desc:"2x12 Stringers Run "+(i+1)+" ("+r+" risers, "+w+"' wide)", qty:sc, unit:"pcs ("+(runLen+2)+"' ea)", cost:runLen*3.50});
+    stItems.push({desc:"2x10 Treads Run "+(i+1), qty:Math.ceil(r*w/16*12*1.05), unit:"pcs (16')", cost:18.50});
+    stItems.push({desc:"1x8 Risers Run "+(i+1), qty:Math.ceil(r*(w+.25)/8), unit:"pcs (8')", cost:9.50});
+    if (num(s.landingLF)>0) {
+      stItems.push({desc:"Landing Framing Run "+(i+1), qty:Math.ceil(num(s.landingLF)*w/10), unit:"pcs", cost:12});
+      stItems.push({desc:"Landing Subfloor Run "+(i+1), qty:Math.ceil(num(s.landingLF)*w/32*1.08), unit:"sheets", cost:P.osb_floor});
+    }
+    stItems.push({desc:"2x4 Stair Blocking Run "+(i+1), qty:4, unit:"pcs", cost:P.fire_block});
+  });
+  if (stItems.length) addCat("Stairs", stItems);
+
+  // -- HARDWARE --
+  const totSF = num(d.totalSF)||800;
+  const tQtyHW = num(d.trussQty)||Math.ceil(Math.sqrt(roofFP)*2/(16/12));
+  addCat("Hardware & Fasteners", [
+    {desc:"16d Framing Nails 30lb box", qty:Math.max(1,Math.ceil(totSF/700)), unit:"boxes", cost:P.nail_box},
+    {desc:'3" Structural Screws (250ct)', qty:Math.max(1,Math.ceil(totSF/200)), unit:"boxes", cost:P.screw_box},
+    {desc:"Simpson H2.5A Hurricane Straps", qty:Math.ceil(tQtyHW*2.1), unit:"pcs", cost:P.h25},
+    {desc:"Simpson LUS210 Joist Hangers", qty:Math.max(10,Math.ceil(totalFP/16*1.1)), unit:"pcs", cost:P.lus210},
+    {desc:"Simpson HD2A Hold-Downs", qty:Math.ceil(totSF/250), unit:"pcs", cost:P.hd2a},
+    {desc:"Post Caps & Bases", qty:Math.ceil(totSF/300), unit:"sets", cost:P.post_cap},
+    {desc:'Mudsill Anchor Bolts 1/2"x10"', qty:Math.ceil((extLF[0]||Math.sqrt(totSF)*4)/6), unit:"pcs", cost:P.anchor_bolt},
+    {desc:"Construction Adhesive PL400", qty:Math.max(1,Math.ceil(totalFP/250)), unit:"tubes", cost:P.pl400},
+    {desc:"LVL/Beam Connector Hardware", qty:Math.max(2,(d.lvls||[]).length+(d.psls||[]).length+(d.steels||[]).length), unit:"sets", cost:P.beam_hw},
+    {desc:"Misc Framing Ties & Angles", qty:Math.ceil(totSF/150), unit:"pcs", cost:P.misc_tie},
+  ]);
+
+  return {cats, total: cats.reduce((s,c)=>s+c.sub, 0)};
+}
+
+// ============================================================
+// PAYMENT SCHEDULE
+// ============================================================
+function paySchedule(total, dep, with_, milestones) {
+  const mid = (100 - dep - with_) / Math.max(milestones.length, 1);
+  return [
+    {name:"Deposit - Due at contract signing", pct:dep, amt:total*dep/100},
+    ...milestones.map(m => ({name:m, pct:mid, amt:total*mid/100})),
+    {name:"Withholding - Released after final inspection", pct:with_, amt:total*with_/100},
+  ];
+}
+
+// ============================================================
+// GROK AUTO-FILL PARSER
+// ============================================================
+function parseGrokOutput(text) {
+  const out = {};
+  const lines = text.split('\n');
+  const find = (patterns) => {
+    for (const line of lines) {
+      for (const p of patterns) {
+        const m = line.match(p);
+        if (m) return m[1]?.trim();
+      }
+    }
+    return null;
+  };
+
+  // Walls
+  const extLF1 = find([/floor\s*1.*?ext.*?(\d+)\s*lf/i, /ext.*?floor\s*1.*?(\d+)\s*lf/i, /exterior.*?floor\s*1.*?(\d+)/i]);
+  const extLF2 = find([/floor\s*2.*?ext.*?(\d+)\s*lf/i, /ext.*?floor\s*2.*?(\d+)\s*lf/i, /exterior.*?floor\s*2.*?(\d+)/i]);
+  const extLF3 = find([/floor\s*3.*?ext.*?(\d+)\s*lf/i, /ext.*?floor\s*3.*?(\d+)\s*lf/i]);
+  if (extLF1) out.extLF1 = extLF1;
+  if (extLF2) out.extLF2 = extLF2;
+  if (extLF3) out.extLF3 = extLF3;
+
+  const intLF1 = find([/floor\s*1.*?int.*?(\d+)\s*lf/i, /int.*?floor\s*1.*?(\d+)\s*lf/i, /interior.*?floor\s*1.*?(\d+)/i]);
+  const intLF2 = find([/floor\s*2.*?int.*?(\d+)\s*lf/i, /int.*?floor\s*2.*?(\d+)\s*lf/i, /interior.*?floor\s*2.*?(\d+)/i]);
+  if (intLF1) out.intLF1 = intLF1;
+  if (intLF2) out.intLF2 = intLF2;
+
+  const wins  = find([/(\d+)\s*windows?/i]);
+  const extDrs= find([/(\d+)\s*exterior\s*doors?/i]);
+  const intDrs= find([/(\d+)\s*interior\s*doors?/i]);
+  const corns = find([/(\d+)\s*(?:90.?|exterior)\s*corners?/i]);
+  const twall = find([/(\d+)\s*t.?wall/i]);
+  if (wins)   out.windows  = wins;
+  if (extDrs) out.extDoors = extDrs;
+  if (intDrs) out.intDoors = intDrs;
+  if (corns)  out.corners  = corns;
+  if (twall)  out.tWalls   = twall;
+
+  // Floor
+  const sf1 = find([/floor\s*1.*?footprint.*?(\d+)\s*sf/i, /(\d+)\s*sf.*?floor\s*1/i]);
+  const sf2 = find([/floor\s*2.*?footprint.*?(\d+)\s*sf/i, /(\d+)\s*sf.*?floor\s*2/i]);
+  if (sf1) out.fpSF1 = sf1;
+  if (sf2) out.fpSF2 = sf2;
+
+  // Roof
+  const rfp   = find([/roof.*?footprint.*?(\d+)\s*sf/i, /roof.*?(\d+)\s*sf/i]);
+  const pitch = find([/(\d+)\/12\s*pitch/i, /pitch.*?(\d+)\/12/i]);
+  const tspan = find([/truss.*?span.*?(\d+)/i, /(\d+).*?truss.*?span/i]);
+  const tqty  = find([/(\d+)\s*trusses?/i]);
+  if (rfp)   out.roofFP   = rfp;
+  if (pitch) out.pitch    = pitch;
+  if (tspan) out.trussSpan= tspan;
+  if (tqty)  out.trussQty = tqty;
+
+  // LVLs - look for patterns like "2 pcs 3.5x11.25 LVL @ 20ft"
+  const lvlMatches = [];
+  const lvlRe = /(\d+)\s*pcs?\s+([\d.]+x[\d.]+\s*lvl)\s*@?\s*(\d+)\s*ft?[^\n]*/gi;
+  let m;
+  while ((m = lvlRe.exec(text)) !== null) {
+    lvlMatches.push({id:uid(), qty:m[1], size:m[2].trim(), length:m[3], location:m[0].split('--').slice(1).join('--').trim()||""});
+  }
+  if (lvlMatches.length) out.lvls = lvlMatches;
+
+  // Stairs
+  const risers = find([/(\d+)\s*risers?/i]);
+  if (risers) out.stairRuns = [{id:uid(), risers, width:"3", landingLF:""}];
+
+  // Totals
+  const totSF = find([/total.*?living.*?(\d+)\s*sf/i, /(\d+)\s*sf.*?total/i]);
+  const stories= find([/(\d)\s*stor/i]);
+  if (totSF)  out.totalSF  = totSF;
+  if (stories) out.stories = stories;
+
+  return out;
+}
+
+// ============================================================
+// ESTIMATE PRINT DOCUMENT
+// ============================================================
+function EstDoc({est, co}) {
+  const isL  = est.etype==="labor";
+  const total= isL ? est.laborCost : est.clientTotal;
+  const sched= paySchedule(total, est.dep, est.with_, est.milestones||[]);
+  const cats = est.calc?.cats||[];
+  const W  = {background:"#fff",color:"#111",borderRadius:12,padding:"36px 44px",maxWidth:820,margin:"0 auto",fontFamily:"'Segoe UI',system-ui,sans-serif",lineHeight:1.6,fontSize:13};
+  const TH = {background:"#f0f0f0",padding:"6px 10px",textAlign:"left",fontWeight:700,border:"1px solid #ddd",fontSize:12};
+  const TD = {padding:"6px 10px",border:"1px solid #ddd",fontSize:12};
+  const TDR= {...TD,textAlign:"right"};
+  const SH = {fontWeight:800,fontSize:12,textTransform:"uppercase",letterSpacing:.5,borderBottom:"2px solid #1a1a2e",paddingBottom:3,marginBottom:8,marginTop:16,color:"#1a1a2e"};
+  const DR = {background:"#1a1a2e",color:"#fff"};
+  return (
+    <div style={W} className="print-doc">
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:18}}>
+        <div>
+          <div style={{fontWeight:900,fontSize:24,letterSpacing:2,color:"#1a1a2e",textTransform:"uppercase"}}>{co.name||"Your Company"}</div>
+          <div style={{fontSize:11,color:"#666",marginTop:2}}>{[co.address,co.phone,co.email,co.license?"Lic# "+co.license:""].filter(Boolean).join("  .  ")}</div>
+        </div>
+        <div style={{textAlign:"right"}}>
+          <div style={{fontWeight:900,fontSize:15}}>Estimate #{est.number}</div>
+          <div style={{fontSize:12,color:"#666"}}>{est.date}</div>
+          <div style={{marginTop:4,display:"inline-block",background:"#1a1a2e",color:"#fff",padding:"2px 10px",borderRadius:4,fontSize:11,fontWeight:700}}>
+            {isL?"LABOR ONLY":"MATERIAL + LABOR"}
+          </div>
+        </div>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
+        <div style={{background:"#f8f8f8",borderRadius:6,padding:12}}>
+          <div style={{fontSize:10,fontWeight:700,color:"#999",textTransform:"uppercase",marginBottom:3}}>Prepared For</div>
+          <div style={{fontWeight:700,fontSize:14}}>{est.clientName}</div>
+          <div style={{fontSize:12,color:"#555"}}>{est.address}</div>
+        </div>
+        <div style={{background:"#f8f8f8",borderRadius:6,padding:12,fontSize:12}}>
+          <table style={{width:"100%",borderCollapse:"collapse"}}>
+            <tbody>
+              {[["Total SF",(est.totalSF||0).toLocaleString()+" SF"],["Stories",est.stories||"-"],
+                ["Ext Wall Ht",wlbl(est.extH1||8)],["Ext Framing",est.extSize||"2x6"],
+                ["Roof",est.roofType==="stick"?"Stick":"Trusses"],["Overhang",(est.overhang||24)+'"']].map(([k,v],i) => (
+                <tr key={i}>
+                  <td style={{color:"#888",padding:"1px 6px 1px 0"}}>{k}:</td>
+                  <td style={{fontWeight:700,padding:"1px 0"}}>{v}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div style={SH}>Scope of Work</div>
+      <p style={{fontSize:12,marginBottom:12,lineHeight:1.7}}>{est.scope}</p>
+      {!isL && cats.map(cat => (
+        <div key={cat.name}>
+          <div style={SH}>{cat.name}</div>
+          <table style={{width:"100%",borderCollapse:"collapse",marginBottom:4,fontSize:12}}>
+            <thead>
+              <tr>
+                <th style={TH}>Description</th>
+                <th style={{...TH,width:48,textAlign:"center"}}>Qty</th>
+                <th style={{...TH,width:75}}>Unit</th>
+                <th style={{...TH,width:82,textAlign:"right"}}>Unit $</th>
+                <th style={{...TH,width:90,textAlign:"right"}}>Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {cat.items.map((m,i) => (
+                <tr key={i}>
+                  <td style={TD}>{m.desc}</td>
+                  <td style={{...TD,textAlign:"center"}}>{m.qty}</td>
+                  <td style={{...TD,color:"#888",fontSize:11}}>{m.unit}</td>
+                  <td style={TDR}>${m.cost.toFixed(2)}</td>
+                  <td style={TDR}>${fmt(m.qty*m.cost)}</td>
+                </tr>
+              ))}
+              <tr style={{background:"#f5f5f5"}}>
+                <td colSpan={4} style={{...TD,fontWeight:700}}>Subtotal - {cat.name}</td>
+                <td style={{...TDR,fontWeight:700}}>${fmt(cat.sub)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      ))}
+      {!isL && (
+        <table style={{width:"100%",borderCollapse:"collapse",marginBottom:8}}>
+          <tbody>
+            <tr style={DR}>
+              <td style={{...TD,color:"#fff",fontWeight:900}} colSpan={4}>TOTAL MATERIALS</td>
+              <td style={{...TDR,color:"#e8a020",fontWeight:900}}>${fmt(est.matCost)}</td>
+            </tr>
+          </tbody>
+        </table>
+      )}
+      <div style={SH}>Labor</div>
+      <table style={{width:"100%",borderCollapse:"collapse",marginBottom:4}}>
+        <tbody>
+          <tr>
+            <td style={TD}>{est.laborType==="sub"?"Subcontractor framing @ $"+est.subRate+"/SF + $"+est.subMarkup+"/SF markup":"Framing labor - complete per approved plans"} - {(est.totalSF||0).toLocaleString()} SF</td>
+            <td style={{...TDR,width:120}}>${fmt(est.laborCost)}</td>
+          </tr>
+          <tr style={DR}>
+            <td style={{...TD,color:"#fff",fontWeight:700}}>Subtotal - Labor</td>
+            <td style={{...TDR,color:"#fff",fontWeight:700}}>${fmt(est.laborCost)}</td>
+          </tr>
+        </tbody>
+      </table>
+      <table style={{width:"100%",borderCollapse:"collapse",margin:"6px 0 14px"}}>
+        <tbody>
+          <tr style={{background:"#0a1628"}}>
+            <td style={{...TD,color:"#fff",fontWeight:900,fontSize:15}}>ESTIMATE TOTAL</td>
+            <td style={{...TDR,color:"#e8a020",fontWeight:900,fontSize:15}}>${fmt(total)}</td>
+          </tr>
+        </tbody>
+      </table>
+      <div style={SH}>Payment Schedule</div>
+      <table style={{width:"100%",borderCollapse:"collapse"}}>
+        <thead>
+          <tr>
+            <th style={TH}>Milestone</th>
+            <th style={{...TH,width:55,textAlign:"right"}}>%</th>
+            <th style={{...TH,width:110,textAlign:"right"}}>Amount</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sched.map((s,i) => (
+            <tr key={i} style={{borderBottom:"1px solid #eee"}}>
+              <td style={TD}>{s.name}</td>
+              <td style={TDR}>{s.pct.toFixed(1)}%</td>
+              <td style={TDR}>${fmt(s.amt)}</td>
+            </tr>
+          ))}
+          <tr style={DR}>
+            <td style={{...TD,color:"#fff",fontWeight:700}}>Total</td>
+            <td style={{...TDR,color:"#fff",fontWeight:700}}>100%</td>
+            <td style={{...TDR,color:"#fff",fontWeight:700}}>${fmt(total)}</td>
+          </tr>
+        </tbody>
+      </table>
+      {est.terms && (
+        <>
+          <div style={SH}>Terms & Conditions</div>
+          <p style={{fontSize:11,color:"#555",lineHeight:1.7}}>{est.terms}</p>
+        </>
+      )}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:40,marginTop:32}}>
+        {["Contractor Authorization","Client Acceptance"].map(l => (
+          <div key={l}>
+            <div style={{fontWeight:700,marginBottom:26,fontSize:12}}>{l}</div>
+            <div style={{borderTop:"1px solid #333",paddingTop:6,fontSize:11,color:"#666"}}>Signature / Date</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// WIZARD
+// ============================================================
+const DEF_MILESTONES = ["Start of Framing","1st Floor Walls Complete","2nd Floor Walls Complete","Roof Framing Complete"];
+
+function Wizard({clients, preClientId, onSave, onBack, onPreview, prices}) {
+  const STEPS = ["Client","Ext Walls","Int Walls","Eng Lumber","Roof","Stairs","Pricing","Payment","Review"];
+  const [step, setStep] = useState(0);
+  const [errors, setErrors] = useState({});
+  const [showGrok, setShowGrok] = useState(false);
+  const [grokText, setGrokText] = useState("");
+  const [grokMsg, setGrokMsg] = useState("");
+
+  // State - flat for simplicity and no inner components
+  const [cid,setCid]         = useState(preClientId||"");
+  const [cname,setCname]     = useState("");
+  const [addr,setAddr]       = useState("");
+  const [date,setDate]       = useState(new Date().toISOString().split("T")[0]);
+  const [estNum]             = useState("EST-"+Date.now().toString().slice(-6));
+  const [totalSF,setTotalSF] = useState("");
+  const [stories,setStories] = useState("2");
+
+  const [extLF1,setEL1]=useState(""); const [extLF2,setEL2]=useState(""); const [extLF3,setEL3]=useState("");
+  const [extH1,setEH1]=useState("8"); const [extH2,setEH2]=useState("8"); const [extH3,setEH3]=useState("8");
+  const [extSize,setExtSize]=useState("2x6"); const [extOC,setExtOC]=useState("16");
+  const [corners,setCorners]=useState(""); const [tWalls,setTWalls]=useState("");
+  const [windows,setWindows]=useState(""); const [extDoors,setExtDoors]=useState(""); const [intDoors,setIntDoors]=useState("");
+
+  const [intLF1,setIL1]=useState(""); const [intLF2,setIL2]=useState(""); const [intLF3,setIL3]=useState("");
+  const [intOC,setIntOC]=useState("16"); const [bearingLF,setBearingLF]=useState("");
+  const [vaultedLF,setVaultedLF]=useState(""); const [vaultedH,setVaultedH]=useState("12");
+  const [fpSF1,setFS1]=useState(""); const [fpSF2,setFS2]=useState(""); const [fpSF3,setFS3]=useState("");
+  const [fpPerim1,setFP1]=useState(""); const [fpPerim2,setFP2]=useState("");
+  const [fjSize,setFjSize]=useState("2x10"); const [fjOC,setFjOC]=useState("16");
+  const [tjiSize,setTjiSize]=useState(""); const [tjiQty,setTjiQty]=useState(""); const [tjiSpacing,setTjiSpacing]=useState('16"');
+
+  const [headers,setHeaders]   = useState([{id:uid(),size:"2x12",qty:"",location:""}]);
+  const addHdr = () => setHeaders(h=>[...h,{id:uid(),size:"2x10",qty:"",location:""}]);
+  const rmHdr  = id => setHeaders(h=>h.filter(x=>x.id!==id));
+  const setHdr = (id,k,v) => setHeaders(h=>h.map(x=>x.id===id?{...x,[k]:v}:x));
+
+  const [lvls,setLvls]     = useState([{id:uid(),size:"1.75x9.5 LVL",length:"",qty:"",location:""}]);
+  const addLvl = () => setLvls(l=>[...l,{id:uid(),size:"1.75x9.5 LVL",length:"",qty:"",location:""}]);
+  const rmLvl  = id => setLvls(l=>l.filter(x=>x.id!==id));
+  const setLvl = (id,k,v) => setLvls(l=>l.map(x=>x.id===id?{...x,[k]:v}:x));
+
+  const [psls,setPsls]     = useState([]);
+  const addPsl = () => setPsls(l=>[...l,{id:uid(),size:"3.5x11.25 PSL",length:"",qty:"",location:""}]);
+  const rmPsl  = id => setPsls(l=>l.filter(x=>x.id!==id));
+  const setPsl = (id,k,v) => setPsls(l=>l.map(x=>x.id===id?{...x,[k]:v}:x));
+
+  const [steels,setSteels] = useState([]);
+  const addSteel = () => setSteels(l=>[...l,{id:uid(),size:"W8x31",length:"",qty:"",location:""}]);
+  const rmSteel  = id => setSteels(l=>l.filter(x=>x.id!==id));
+  const setSteel = (id,k,v) => setSteels(l=>l.map(x=>x.id===id?{...x,[k]:v}:x));
+
+  const [roofType,setRoofType]=useState("truss");
+  const [roofFP,setRoofFP]=useState(""); const [pitch,setPitch]=useState("6");
+  const [trussSpan,setTrussSpan]=useState(""); const [trussQty,setTrussQty]=useState(""); const [trussSpacing,setTrussSpacing]=useState('24"');
+  const [rafterSize,setRafterSize]=useState("2x10"); const [rafterOC,setRafterOC]=useState("16"); const [ridgeSize,setRidgeSize]=useState("2x10");
+  const [overhang,setOverhang]=useState("24");
+  const [fasciaLF,setFasciaLF]=useState(""); const [fasciaSize,setFasciaSize]=useState("1x8");
+  const [subfasciaLF,setSubfasciaLF]=useState(""); const [subfasciaSize,setSubfasciaSize]=useState("6");
+  const [soffitLF,setSoffitLF]=useState(""); const [soffitW,setSoffitW]=useState("2");
+  const [bargeLF,setBargeLF]=useState(""); const [bargeSize,setBargeSize]=useState("1x10");
+  const [friezeLF,setFriezeLF]=useState(""); const [friezeSize,setFriezeSize]=useState("1x6");
+  const [cornerBoard,setCornerBoard]=useState("1x4");
+
+  const [stairRuns,setStairRuns] = useState([{id:uid(),risers:"",width:"3",landingLF:""}]);
+  const addRun = () => setStairRuns(r=>[...r,{id:uid(),risers:"",width:"3",landingLF:""}]);
+  const rmRun  = id => setStairRuns(r=>r.filter(x=>x.id!==id));
+  const setRun = (id,k,v) => setStairRuns(r=>r.map(x=>x.id===id?{...x,[k]:v}:x));
+
+  const [laborType,setLaborType]=useState("my-crew");
+  const [laborRate,setLaborRate]=useState("12");
+  const [subRate,setSubRate]=useState("10"); const [subMarkup,setSubMarkup]=useState("2");
+  const [profitMode,setProfitMode]=useState("pct");
+  const [profitPct,setProfitPct]=useState("20"); const [profitSF,setProfitSF]=useState("5");
+  const [etype,setEtype]=useState("mat-labor");
+  const [dep,setDep]=useState("10"); const [with_,setWith_]=useState("10");
+  const [milestones,setMilestones]=useState([...DEF_MILESTONES]);
+  const [scope,setScope]=useState("Supply all labor and materials for complete structural framing of new residential construction per approved plans and specifications, including all rough framing, engineered lumber, roof system, stairs, and finish lumber as specified.");
+  const [terms,setTerms]=useState("All work performed per local building codes and approved plans. Owner responsible for permits. Changes require written change order. Retainage released within 5 business days of passed framing inspection.");
+
+  function loadClient(id) {
+    const c = clients.find(c=>c.id===id);
+    if (c) { setCname(c.fname+" "+c.lname); setAddr(c.address||""); }
+  }
+
+  function loadSample() {
+    const s = SAMPLE_PROJECT;
+    setCname("Sample Client"); setAddr("123 Michigan Ave, Detroit MI 48201");
+    setTotalSF(s.totalSF); setStories(s.stories);
+    setEL1(s.extLF1); setEH1(s.extH1); setEL2(s.extLF2); setEH2(s.extH2);
+    setExtSize(s.extSize); setExtOC(s.extOC);
+    setCorners(s.corners); setTWalls(s.tWalls); setWindows(s.windows);
+    setExtDoors(s.extDoors); setIntDoors(s.intDoors);
+    setIL1(s.intLF1); setIL2(s.intLF2); setIntOC(s.intOC);
+    setBearingLF(s.bearingLF);
+    setFS1(s.fpSF1); setFS2(s.fpSF2); setFP1(s.fpPerim1); setFP2(s.fpPerim2);
+    setFjSize(s.fjSize); setFjOC(s.fjOC);
+    setLvls(s.lvls); setHeaders(s.headers);
+    setStairRuns(s.stairRuns);
+    setRoofType(s.roofType); setRoofFP(s.roofFP); setPitch(s.pitch);
+    setTrussSpan(s.trussSpan); setTrussQty(s.trussQty);
+    setBargeLF(s.bargeLF);
+    setLaborType(s.laborType); setLaborRate(s.laborRate);
+    setProfitMode(s.profitMode); setProfitPct(s.profitPct);
+    setScope(s.scope); setTerms(s.terms);
+    setStep(6);
+  }
+
+  function applyGrok() {
+    if (!grokText.trim()) { setGrokMsg("Paste Grok output first."); return; }
+    const parsed = parseGrokOutput(grokText);
+    let count = 0;
+    if (parsed.totalSF)  { setTotalSF(parsed.totalSF);  count++; }
+    if (parsed.stories)  { setStories(parsed.stories);   count++; }
+    if (parsed.extLF1)   { setEL1(parsed.extLF1);        count++; }
+    if (parsed.extLF2)   { setEL2(parsed.extLF2);        count++; }
+    if (parsed.extLF3)   { setEL3(parsed.extLF3);        count++; }
+    if (parsed.intLF1)   { setIL1(parsed.intLF1);        count++; }
+    if (parsed.intLF2)   { setIL2(parsed.intLF2);        count++; }
+    if (parsed.windows)  { setWindows(parsed.windows);   count++; }
+    if (parsed.extDoors) { setExtDoors(parsed.extDoors); count++; }
+    if (parsed.intDoors) { setIntDoors(parsed.intDoors); count++; }
+    if (parsed.corners)  { setCorners(parsed.corners);   count++; }
+    if (parsed.tWalls)   { setTWalls(parsed.tWalls);     count++; }
+    if (parsed.fpSF1)    { setFS1(parsed.fpSF1);         count++; }
+    if (parsed.fpSF2)    { setFS2(parsed.fpSF2);         count++; }
+    if (parsed.roofFP)   { setRoofFP(parsed.roofFP);    count++; }
+    if (parsed.pitch)    { setPitch(parsed.pitch);       count++; }
+    if (parsed.trussSpan){ setTrussSpan(parsed.trussSpan); count++; }
+    if (parsed.trussQty) { setTrussQty(parsed.trussQty);  count++; }
+    if (parsed.lvls && parsed.lvls.length) { setLvls(parsed.lvls); count++; }
+    if (parsed.stairRuns && parsed.stairRuns.length) { setStairRuns(parsed.stairRuns); count++; }
+    setGrokMsg(count > 0 ? "Filled " + count + " fields from Grok output! Review each tab." : "Could not find matching data. Check the format.");
+  }
+
+  function mkSpec() {
+    return {
+      totalSF,extLF1,extLF2,extLF3,extH1,extH2,extH3,extSize,extOC,
+      corners,tWalls,windows,extDoors,intDoors,
+      intLF1,intLF2,intLF3,intOC,bearingLF,vaultedLF,vaultedH,
+      headers:headers.filter(h=>h.qty),
+      lvls:lvls.filter(l=>l.qty&&l.length),
+      psls:psls.filter(l=>l.qty&&l.length),
+      steels:steels.filter(l=>l.qty&&l.length),
+      fpSF1,fpSF2,fpSF3,fpPerim1,fpPerim2,fjSize,fjOC,tjiSize,tjiQty,tjiSpacing,
+      roofType,roofFP,pitch,trussSpan,trussQty,trussSpacing,rafterSize,rafterOC,ridgeSize,overhang,
+      fasciaLF,fasciaSize,subfasciaLF,subfasciaSize,soffitLF,soffitW,bargeLF,bargeSize,friezeLF,friezeSize,cornerBoard,
+      stairRuns:stairRuns.filter(r=>r.risers),
+    };
+  }
+
+  function mkPrice() {
+    const sf = num(totalSF);
+    const calc = calcMaterials(mkSpec(), prices);
+    const mat = calc.total;
+    const labor = laborType==="my-crew" ? sf*num(laborRate) : sf*(num(subRate)+num(subMarkup));
+    const base = mat+labor;
+    const profit = profitMode==="pct" ? base*num(profitPct)/100 : sf*num(profitSF);
+    const client = base+profit;
+    return {sf, mat, labor, profit, client, calc};
+  }
+
+  function validate() {
+    const e = {};
+    if (!cname.trim()) e.cname = "Required";
+    if (!totalSF || num(totalSF) <= 0) e.totalSF = "Enter total SF";
+    if (!extLF1 || num(extLF1) <= 0)   e.extLF1  = "Enter Floor 1 ext wall LF";
+    setErrors(e);
+    return Object.keys(e).length === 0;
+  }
+
+  const {sf, mat, labor, profit, client, calc} = mkPrice();
+  const finalTotal = etype==="labor" ? labor : client;
+  const sched = paySchedule(finalTotal, num(dep), num(with_), milestones);
+
+  function mkRecord(type) {
+    const p = mkPrice();
+    return {
+      id:uid(), cid, clientName:cname||"Client", address:addr, date, number:estNum,
+      etype:type||etype, totalSF:num(totalSF), stories, extH1, extSize, roofType, overhang,
+      matCost:p.mat, laborCost:p.labor, profit:p.profit, clientTotal:p.client,
+      total:(type||etype)==="labor"?p.labor:p.client, calc:p.calc,
+      dep:num(dep), with_:num(with_), milestones, laborType, subRate, subMarkup, laborRate,
+      scope, terms, status:"pending", createdAt:Date.now()
+    };
+  }
+
+  const LVL_SIZES  = ["1.75x9.5 LVL","1.75x11.25 LVL","1.75x14 LVL","1.75x16 LVL","3.5x9.5 LVL","3.5x11.25 LVL","3.5x14 LVL","3.5x16 LVL","5.25x11.25 LVL","5.25x14 LVL","5.25x16 LVL","7x14 LVL","7x16 LVL"];
+  const PSL_SIZES  = ["3.5x9.5 PSL","3.5x11.25 PSL","3.5x14 PSL","5.25x11.25 PSL","5.25x14 PSL","5.25x16 PSL","7x14 PSL","7x16 PSL"];
+  const STEEL_SIZES= ["W4x13","W6x15","W6x20","W8x24","W8x31","W10x33","W10x49","W12x40","W12x50","W14x48","Flitch 1/2in","Flitch 3/4in"];
+
+  const showF2 = stories==="2"||stories==="3";
+  const showF3 = stories==="3";
+
+  const GROK_PROMPT = `Analyze these framing plans and extract ALL quantities for a complete lumber takeoff. Be exact.
+
+WALLS:
+Exterior wall LF per floor + wall height per floor
+Interior wall LF per floor
+Bearing wall LF (load-bearing interior, 2x6)
+Number of 90-degree exterior corners
+Number of T-wall intersections
+Window count + each rough opening size (W x H)
+Exterior door count + sizes. Interior door count
+Any tall/vaulted walls: height + LF
+
+FLOOR SYSTEM:
+Floor footprint SF per level. Floor perimeter LF per level (for rim joist)
+Floor joist type: TJI or dimensional (size + spacing)
+
+ENGINEERED LUMBER - list every single piece:
+Size (e.g. 3-1/2 x 11-1/4) + exact length + quantity + location
+Example: 2 pcs 3.5x11.25 LVL at 20ft - main floor beam
+
+ROOF:
+Type: pre-built trusses OR stick framed
+If trusses: span + spacing + quantity. If stick: rafter size + spacing + ridge size
+Roof pitch (e.g. 6/12). Roof footprint SF. Eave overhang width (inches)
+
+STAIRS (each run): Number of risers + stair width + any landings
+
+HEADERS (dimensional): Each size, quantity, location
+
+FINISH LUMBER: Fascia size + total LF. Sub-fascia size + LF. Soffit width + perimeter LF. Barge/rake board size + LF. Frieze board size + LF
+
+Format as numbered list by section with exact dimensions.`;
+
+  return (
+    <div>
+      <BackBtn onClick={onBack} label="<-- Cancel Estimate"/>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16,flexWrap:"wrap",gap:12}}>
+        <div>
+          <h2 style={{fontWeight:900,fontSize:22,textTransform:"uppercase",letterSpacing:1,marginBottom:4}}>New Framing Estimate</h2>
+          <p style={{color:C.mut,fontSize:13}}>Complete each section. Use Back / Next to navigate.</p>
+        </div>
+        <Btn v="sec" onClick={loadSample}>Load Sample 2,400 SF Colonial</Btn>
+      </div>
+
+      {/* Progress bar */}
+      <div style={{height:4,background:C.sur3,borderRadius:2,marginBottom:20,overflow:"hidden"}}>
+        <div style={{height:"100%",background:C.acc,borderRadius:2,width:((step+1)/STEPS.length*100)+"%",transition:"width .3s"}}/>
+      </div>
+
+      {/* Grok panel */}
+      <Card>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <span style={{fontWeight:700,fontSize:13}}>Grok / AI Auto-Fill</span>
+          <Btn v="ghost" sz="sm" onClick={()=>setShowGrok(v=>!v)}>{showGrok?"Hide":"Show Prompt & Paste"}</Btn>
+        </div>
+        {showGrok && (
+          <div style={{marginTop:12}}>
+            <p style={{fontSize:12,color:C.mut,marginBottom:8}}>1. Copy the prompt below. 2. Send to Grok with your plans. 3. Paste Grok response and click Apply.</p>
+            <div style={{background:C.sur3,borderRadius:8,padding:12,marginBottom:10,position:"relative"}}>
+              <pre style={{fontSize:10,color:C.mut,lineHeight:1.5,whiteSpace:"pre-wrap",fontFamily:"monospace"}}>{GROK_PROMPT}</pre>
+              <Btn sz="sm" v="sec" style={{position:"absolute",top:8,right:8}}
+                onClick={()=>{try{navigator.clipboard.writeText(GROK_PROMPT);}catch(e){} alert("Prompt copied!");}}>
+                Copy
+              </Btn>
+            </div>
+            <Txt label="Paste Grok Response Here" value={grokText} onChange={setGrokText} rows={6} placeholder="Paste the full Grok takeoff response here..."/>
+            <div style={{display:"flex",gap:10,alignItems:"center"}}>
+              <Btn onClick={applyGrok}>Apply Grok Data to Fields</Btn>
+              {grokMsg && <span style={{fontSize:12,color:grokMsg.includes("Filled")?C.grn:C.red}}>{grokMsg}</span>}
+            </div>
+          </div>
+        )}
+      </Card>
+
+      {/* Step tabs */}
+      <div style={{display:"flex",borderBottom:"1px solid "+C.brd,marginBottom:20,overflowX:"auto"}}>
+        {STEPS.map((s,i) => (
+          <button key={i} onClick={()=>{ if(i<=step) setStep(i); }}
+            style={{background:"none",border:"none",
+              color:i===step?C.acc:i<step?C.grn:C.mut,
+              padding:"9px 14px",cursor:i<=step?"pointer":"default",fontFamily:"inherit",fontSize:12,fontWeight:700,
+              borderBottom:"2px solid "+(i===step?C.acc:"transparent"),marginBottom:-1,whiteSpace:"nowrap",opacity:i>step?.4:1}}>
+            {i+1}. {s}
+          </button>
+        ))}
+      </div>
+
+      {/* STEP 0: Client */}
+      {step===0 && (
+        <G2>
+          <Card>
+            <CardTitle>Client & Project</CardTitle>
+            <Sel label="Select Existing Client" value={cid} onChange={id=>{setCid(id);loadClient(id);}}
+              options={[{value:"",label:"-- Enter manually --"},...clients.map(c=>({value:c.id,label:c.fname+" "+c.lname}))]}/>
+            <Inp label="Client Name" value={cname} onChange={setCname} placeholder="Full name" err={errors.cname}/>
+            <Inp label="Project Address" value={addr} onChange={setAddr} placeholder="123 Main St, City, ST"/>
+            <G2>
+              <Inp label="Date" value={date} onChange={setDate} type="date"/>
+              <Inp label="Estimate #" value={estNum} onChange={()=>{}} readOnly/>
+            </G2>
+          </Card>
+          <Card>
+            <CardTitle>Building Overview</CardTitle>
+            <Inp label="Total Living Area" value={totalSF} onChange={setTotalSF} type="number" placeholder="e.g. 2400" suffix="SF" tip="all heated floors" err={errors.totalSF}/>
+            <Sel label="Stories" value={stories} onChange={setStories}
+              options={[{value:"1",label:"1 Story"},{value:"2",label:"2 Stories"},{value:"3",label:"3 Stories"}]}/>
+            <div style={{background:C.sur3,borderRadius:8,padding:12,fontSize:12,color:C.mut,lineHeight:1.7,marginTop:8}}>
+              <strong style={{color:C.txt}}>Tip:</strong> Use Grok above to extract all measurements from your PDF plans automatically. Or load the Sample Project to see a complete 2,400 SF example.
+            </div>
+          </Card>
+        </G2>
+      )}
+
+      {/* STEP 1: Exterior Walls */}
+      {step===1 && (
+        <G2>
+          <Card>
+            <CardTitle>Exterior Wall Specs</CardTitle>
+            <Sel label="Stud Size" value={extSize} onChange={setExtSize}
+              options={[{value:"2x6",label:"2x6 (standard energy code)"},{value:"2x4",label:"2x4"}]}/>
+            <Sel label="Spacing OC" value={extOC} onChange={setExtOC}
+              options={[{value:"16",label:'16" on center'},{value:"24",label:'24" on center'}]}/>
+            <Hr/>
+            <CardTitle>Ext Wall LF Per Floor</CardTitle>
+            <p style={{fontSize:12,color:C.mut,marginBottom:10}}>Total linear feet of exterior walls per floor (full perimeter of each level).</p>
+            <G2>
+              <Inp label="Floor 1 Ext Wall LF" value={extLF1} onChange={setEL1} type="number" placeholder="e.g. 180" suffix="LF" err={errors.extLF1}/>
+              <Sel label="Floor 1 Height" value={extH1} onChange={setEH1}
+                options={[{value:"8",label:'8ft (92-5/8")'},{value:"9",label:'9ft (104-5/8")'},{value:"10",label:'10ft (116-5/8")'}]}/>
+            </G2>
+            {showF2 && <G2>
+              <Inp label="Floor 2 Ext Wall LF" value={extLF2} onChange={setEL2} type="number" placeholder="e.g. 160" suffix="LF"/>
+              <Sel label="Floor 2 Height" value={extH2} onChange={setEH2}
+                options={[{value:"8",label:'8ft (92-5/8")'},{value:"9",label:'9ft (104-5/8")'},{value:"10",label:'10ft (116-5/8")'}]}/>
+            </G2>}
+            {showF3 && <G2>
+              <Inp label="Floor 3 Ext Wall LF" value={extLF3} onChange={setEL3} type="number" placeholder="e.g. 120" suffix="LF"/>
+              <Sel label="Floor 3 Height" value={extH3} onChange={setEH3}
+                options={[{value:"8",label:'8ft (92-5/8")'},{value:"9",label:'9ft (104-5/8")'},{value:"10",label:'10ft (116-5/8")'}]}/>
+            </G2>}
+          </Card>
+          <Card>
+            <CardTitle>Openings & Corners</CardTitle>
+            <p style={{fontSize:12,color:C.mut,marginBottom:12}}>Used to calculate king studs, jack studs, cripples, corner backing, and T-wall backers.</p>
+            <G2>
+              <Inp label="Windows (all floors)" value={windows} onChange={setWindows} type="number" placeholder="e.g. 18"/>
+              <Inp label="Exterior Doors" value={extDoors} onChange={setExtDoors} type="number" placeholder="e.g. 4"/>
+              <Inp label="Interior Doors" value={intDoors} onChange={setIntDoors} type="number" placeholder="e.g. 14"/>
+              <Inp label="90-deg Corners" value={corners} onChange={setCorners} type="number" placeholder="e.g. 8" tip="3 studs each"/>
+              <Inp label="T-Wall Intersections" value={tWalls} onChange={setTWalls} type="number" placeholder="e.g. 12" tip="2 studs each"/>
+            </G2>
+            <div style={{background:C.sur3,borderRadius:8,padding:12,fontSize:11,color:C.mut,lineHeight:1.9}}>
+              Auto-calculated from inputs:<br/>
+              <b style={{color:C.txt}}>Corner backing</b> -- 3 studs x corners (drywall backer)<br/>
+              <b style={{color:C.txt}}>T-wall backers</b> -- 2 studs x intersections<br/>
+              <b style={{color:C.txt}}>King+Jack studs</b> -- 4 per window/ext door, 2 per int door<br/>
+              <b style={{color:C.txt}}>Cripple studs</b> -- 4 per window, 2 per door<br/>
+              <b style={{color:C.txt}}>Bracing studs (16ft)</b> -- 1 per 25 LF ext wall<br/>
+              <b style={{color:C.txt}}>PT sill plate, fire blocking, OSB sheathing, housewrap</b>
+            </div>
+          </Card>
+        </G2>
+      )}
+
+      {/* STEP 2: Interior Walls */}
+      {step===2 && (
+        <G2>
+          <Card>
+            <CardTitle>Interior Walls (2x4)</CardTitle>
+            <Sel label="Interior Spacing" value={intOC} onChange={setIntOC}
+              options={[{value:"16",label:'16" OC'},{value:"24",label:'24" OC'}]}/>
+            <Inp label="Floor 1 Int Wall LF" value={intLF1} onChange={setIL1} type="number" placeholder="e.g. 220" suffix="LF"/>
+            {showF2 && <Inp label="Floor 2 Int Wall LF" value={intLF2} onChange={setIL2} type="number" placeholder="e.g. 200" suffix="LF"/>}
+            {showF3 && <Inp label="Floor 3 Int Wall LF" value={intLF3} onChange={setIL3} type="number" placeholder="e.g. 150" suffix="LF"/>}
+            <Hr/>
+            <Inp label="Bearing Wall LF (2x6, load-bearing)" value={bearingLF} onChange={setBearingLF} type="number" placeholder="e.g. 40" suffix="LF" tip="walls carrying floor/roof loads"/>
+            <Hr/>
+            <CardTitle>Vaulted / Tall Walls</CardTitle>
+            <G2>
+              <Inp label="Tall Wall LF" value={vaultedLF} onChange={setVaultedLF} type="number" placeholder="e.g. 32" suffix="LF"/>
+              <Inp label="Tall Wall Height" value={vaultedH} onChange={setVaultedH} type="number" placeholder="12" suffix="ft"/>
+            </G2>
+          </Card>
+          <Card>
+            <CardTitle>Floor System</CardTitle>
+            <Sel label="Floor Joist Type" value={tjiSize?"TJI":"dim"} onChange={v=>{if(v==="dim") setTjiSize("");}}
+              options={[{value:"dim",label:"Dimensional (2x8/2x10/2x12)"},{value:"TJI",label:"TJI / I-Joist (engineered)"}]}/>
+            {!tjiSize && <G2>
+              <Sel label="Joist Size" value={fjSize} onChange={setFjSize} options={["2x8","2x10","2x12"].map(v=>({value:v,label:v}))}/>
+              <Inp label="Spacing OC" value={fjOC} onChange={setFjOC} type="number" placeholder="16" suffix='"'/>
+            </G2>}
+            {tjiSize && <>
+              <Sel label="TJI Size" value={tjiSize} onChange={setTjiSize}
+                options={["","TJI 110 9-1/2in","TJI 210 9-1/2in","TJI 360 9-1/2in","TJI 360 11-7/8in","TJI 560 11-7/8in","TJI 560 14in"].map(v=>({value:v,label:v||"Select TJI"}))}/>
+              <G2>
+                <Inp label="TJI Spacing" value={tjiSpacing} onChange={setTjiSpacing} placeholder='16"'/>
+                <Inp label="TJI Total Qty" value={tjiQty} onChange={setTjiQty} type="number" placeholder="from plans"/>
+              </G2>
+            </>}
+            <Hr/>
+            <G2>
+              <Inp label="Floor 1 Footprint SF" value={fpSF1} onChange={setFS1} type="number" placeholder="e.g. 1200" suffix="SF"/>
+              {showF2 && <Inp label="Floor 2 Footprint SF" value={fpSF2} onChange={setFS2} type="number" placeholder="e.g. 1100" suffix="SF"/>}
+              <Inp label="Floor 1 Perimeter LF" value={fpPerim1} onChange={setFP1} type="number" placeholder="e.g. 140" suffix="LF" tip="for rim joist"/>
+              {showF2 && <Inp label="Floor 2 Perimeter LF" value={fpPerim2} onChange={setFP2} type="number" placeholder="e.g. 130" suffix="LF"/>}
+            </G2>
+            <Hr/>
+            <CardTitle>Headers (Dimensional)</CardTitle>
+            {headers.map(h => (
+              <div key={h.id} style={{display:"flex",gap:8,marginBottom:8,alignItems:"flex-start"}}>
+                <div style={{flex:"0 0 120px"}}>
+                  <select value={h.size} onChange={e=>setHdr(h.id,"size",e.target.value)} style={iS()}>
+                    {["2x8","2x10","2x12","4x8","4x10","4x12","4x14","6x10","6x12"].map(o=><option key={o} value={o}>{o}</option>)}
+                  </select>
+                </div>
+                <div style={{flex:"0 0 65px"}}>
+                  <input value={h.qty} onChange={e=>setHdr(h.id,"qty",e.target.value)} placeholder="Qty" type="number" style={iS()}/>
+                </div>
+                <div style={{flex:1}}>
+                  <input value={h.location} onChange={e=>setHdr(h.id,"location",e.target.value)} placeholder="Location" style={iS()}/>
+                </div>
+                <Btn v="red" sz="sm" onClick={()=>rmHdr(h.id)}>X</Btn>
+              </div>
+            ))}
+            <Btn v="ghost" sz="sm" onClick={addHdr}>+ Add Header</Btn>
+          </Card>
+        </G2>
+      )}
+
+      {/* STEP 3: Engineered Lumber */}
+      {step===3 && (
+        <div>
+          <Card style={{borderColor:C.acc+"50"}}>
+            <CardTitle>LVL Beams -- Add Each Piece Individually</CardTitle>
+            <p style={{fontSize:12,color:C.mut,marginBottom:12}}>Every LVL beam listed separately. This is your actual lumber order.</p>
+            <div style={{display:"flex",gap:8,marginBottom:6}}>
+              {["Size","Length ft","Qty","Location"].map((h,i) => (
+                <span key={i} style={{fontSize:11,color:C.mut,fontWeight:700,textTransform:"uppercase",
+                  flex:i===3?1:i===0?"0 0 185px":i===1?"0 0 88px":"0 0 65px"}}>
+                  {h}
+                </span>
+              ))}
+            </div>
+            {lvls.map(l => <BeamRow key={l.id} item={l} onSet={setLvl} onRm={rmLvl} sizeOptions={LVL_SIZES}/>)}
+            <Btn v="ghost" sz="sm" onClick={addLvl}>+ Add LVL</Btn>
+          </Card>
+          <Card>
+            <CardTitle>PSL / Parallam Beams</CardTitle>
+            {!psls.length && <p style={{fontSize:12,color:C.mut,marginBottom:8}}>No PSL beams? Skip this section.</p>}
+            {psls.map(l => <BeamRow key={l.id} item={l} onSet={setPsl} onRm={rmPsl} sizeOptions={PSL_SIZES}/>)}
+            <Btn v="ghost" sz="sm" onClick={addPsl}>+ Add PSL</Btn>
+          </Card>
+          <Card>
+            <CardTitle>Steel Beams / Flitch Plates</CardTitle>
+            {!steels.length && <p style={{fontSize:12,color:C.mut,marginBottom:8}}>No steel? Skip this section.</p>}
+            {steels.map(l => <BeamRow key={l.id} item={l} onSet={setSteel} onRm={rmSteel} sizeOptions={STEEL_SIZES}/>)}
+            <Btn v="ghost" sz="sm" onClick={addSteel}>+ Add Steel</Btn>
+          </Card>
+        </div>
+      )}
+
+      {/* STEP 4: Roof */}
+      {step===4 && (
+        <G2>
+          <Card>
+            <CardTitle>Roof System</CardTitle>
+            <Sel label="Roof Type" value={roofType} onChange={setRoofType}
+              options={[{value:"truss",label:"Pre-engineered Trusses"},{value:"stick",label:"Stick Framed Rafters"}]}/>
+            <G2>
+              <Inp label="Roof Footprint SF" value={roofFP} onChange={setRoofFP} type="number" placeholder={fpSF1||"e.g. 1200"} suffix="SF" tip="plan view"/>
+              <Inp label="Roof Pitch" value={pitch} onChange={setPitch} type="number" placeholder="6" suffix="/12"/>
+            </G2>
+            <Inp label="Eave Overhang Width" value={overhang} onChange={setOverhang} type="number" placeholder="24" suffix='"' tip="inches"/>
+            {roofType==="truss" && <>
+              <Hr/>
+              <CardTitle>Truss Details</CardTitle>
+              <G2>
+                <Inp label="Truss Span" value={trussSpan} onChange={setTrussSpan} type="number" placeholder="e.g. 30" suffix="ft"/>
+                <Inp label="Truss Spacing" value={trussSpacing} onChange={setTrussSpacing} placeholder='24"'/>
+                <Inp label="Truss Quantity" value={trussQty} onChange={setTrussQty} type="number" placeholder="from supplier"/>
+              </G2>
+            </>}
+            {roofType==="stick" && <>
+              <Hr/>
+              <CardTitle>Rafter Details</CardTitle>
+              <G2>
+                <Sel label="Rafter Size" value={rafterSize} onChange={setRafterSize} options={["2x6","2x8","2x10","2x12"].map(v=>({value:v,label:v}))}/>
+                <Inp label="Rafter Spacing OC" value={rafterOC} onChange={setRafterOC} type="number" placeholder="16" suffix='"'/>
+                <Sel label="Ridge Size" value={ridgeSize} onChange={setRidgeSize} options={["2x8","2x10","2x12","3.5x11.25 LVL","3.5x14 LVL"].map(v=>({value:v,label:v}))}/>
+              </G2>
+            </>}
+          </Card>
+          <Card>
+            <CardTitle>Fascia, Soffit & Finish Lumber</CardTitle>
+            <p style={{fontSize:12,color:C.mut,marginBottom:10}}>Leave LF blank to auto-estimate from wall perimeter.</p>
+            <G2>
+              <Sel label="Fascia Size" value={fasciaSize} onChange={setFasciaSize} options={["1x6","1x8","1x10","1x12","2x6","2x8","2x10"].map(v=>({value:v,label:v}))}/>
+              <Inp label="Fascia LF" value={fasciaLF} onChange={setFasciaLF} type="number" placeholder="auto" suffix="LF"/>
+            </G2>
+            <G2>
+              <Sel label="Sub-Fascia Size" value={subfasciaSize} onChange={setSubfasciaSize} options={["4","6","8","10"].map(v=>({value:v,label:"2x"+v}))}/>
+              <Inp label="Sub-Fascia LF" value={subfasciaLF} onChange={setSubfasciaLF} type="number" placeholder="auto" suffix="LF"/>
+            </G2>
+            <G2>
+              <Inp label="Soffit Width" value={soffitW} onChange={setSoffitW} type="number" placeholder="2" suffix="ft"/>
+              <Inp label="Soffit Perimeter LF" value={soffitLF} onChange={setSoffitLF} type="number" placeholder="auto" suffix="LF"/>
+            </G2>
+            <Hr/>
+            <G2>
+              <Sel label="Barge/Rake Size" value={bargeSize} onChange={setBargeSize} options={["1x8","1x10","1x12","2x8","2x10"].map(v=>({value:v,label:v}))}/>
+              <Inp label="Barge/Rake LF" value={bargeLF} onChange={setBargeLF} type="number" placeholder="0" suffix="LF" tip="gable ends"/>
+            </G2>
+            <G2>
+              <Sel label="Frieze Board Size" value={friezeSize} onChange={setFriezeSize} options={["1x4","1x6","1x8"].map(v=>({value:v,label:v}))}/>
+              <Inp label="Frieze LF" value={friezeLF} onChange={setFriezeLF} type="number" placeholder="auto" suffix="LF"/>
+            </G2>
+            <Sel label="Corner Boards" value={cornerBoard} onChange={setCornerBoard} options={["none","1x4","1x6","5/4x4","5/4x6"].map(v=>({value:v,label:v}))}/>
+          </Card>
+        </G2>
+      )}
+
+      {/* STEP 5: Stairs */}
+      {step===5 && (
+        <Card>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+            <CardTitle>Stair Runs</CardTitle>
+            <Btn v="ghost" sz="sm" onClick={addRun}>+ Add Stair Run</Btn>
+          </div>
+          <p style={{fontSize:12,color:C.mut,marginBottom:14}}>Each run generates stringers, treads, risers, and landing lumber. No stairs? Leave blank and continue.</p>
+          {stairRuns.map((s,i) => (
+            <StairRow key={s.id} run={s} idx={i} total={stairRuns.length}
+              onChange={(k,v)=>setRun(s.id,k,v)} onRemove={()=>rmRun(s.id)}/>
+          ))}
+        </Card>
+      )}
+
+      {/* STEP 6: Pricing */}
+      {step===6 && (
+        <G2>
+          <Card>
+            <CardTitle>Labor</CardTitle>
+            <Sel label="Labor Type" value={laborType} onChange={setLaborType}
+              options={[{value:"my-crew",label:"My Crew (I set the rate)"},{value:"sub",label:"Subcontractor (per SF)"}]}/>
+            {laborType==="my-crew" && <Inp label="My Labor Rate" value={laborRate} onChange={setLaborRate} type="number" placeholder="12.00" suffix="$/SF"/>}
+            {laborType==="sub" && <>
+              <Inp label="Sub Rate" value={subRate} onChange={setSubRate} type="number" placeholder="10.00" suffix="$/SF"/>
+              <Inp label="My Markup on Sub" value={subMarkup} onChange={setSubMarkup} type="number" placeholder="2.00" suffix="$/SF"/>
+              <div style={{background:C.sur3,borderRadius:8,padding:10,fontSize:12,color:C.mut}}>
+                Charge client <b style={{color:C.txt}}>${(num(subRate)+num(subMarkup)).toFixed(2)}/SF</b> -- Margin: <b style={{color:C.grn}}>${fmt(num(totalSF)*num(subMarkup))}</b>
+              </div>
+            </>}
+            <Hr/>
+            <CardTitle>Profit</CardTitle>
+            <div style={{display:"flex",background:C.sur3,borderRadius:8,padding:3,gap:3,marginBottom:12}}>
+              {[["pct","% of total cost"],["sf","$ per SF"]].map(([v,l]) => (
+                <div key={v} onClick={()=>setProfitMode(v)}
+                  style={{flex:1,textAlign:"center",padding:"7px",borderRadius:6,cursor:"pointer",fontSize:12,fontWeight:700,
+                    background:profitMode===v?C.acc:"none",color:profitMode===v?"#000":C.mut,transition:"all .2s"}}>
+                  {l}
+                </div>
+              ))}
+            </div>
+            {profitMode==="pct" && <Inp label="Profit %" value={profitPct} onChange={setProfitPct} type="number" placeholder="20" suffix="%"/>}
+            {profitMode==="sf"  && <Inp label="Profit per SF" value={profitSF} onChange={setProfitSF} type="number" placeholder="5" suffix="$/SF"/>}
+            <Hr/>
+            <Sel label="Estimate Type" value={etype} onChange={setEtype}
+              options={[{value:"mat-labor",label:"Material + Labor"},{value:"labor",label:"Labor Only"}]}/>
+          </Card>
+          <Card>
+            <CardTitle>Cost Summary</CardTitle>
+            <G2>
+              <Stat value={num(totalSF).toLocaleString()+" SF"} label="Living Area"/>
+              <Stat value={$(mat)} label="Materials"/>
+              <Stat value={$(labor)} label="Labor"/>
+              <Stat value={$(mat+labor)} label="Your Cost"/>
+              <Stat value={$(profit)} label="Profit" accent/>
+              <Stat value={$(client)} label="Client Total" accent/>
+            </G2>
+            <div style={{background:C.sur2,borderRadius:8,padding:14,marginTop:12,fontSize:13,lineHeight:2.2}}>
+              {[["Material/SF","$"+(mat/Math.max(sf,1)).toFixed(2)],
+                ["Labor/SF","$"+(labor/Math.max(sf,1)).toFixed(2)],
+                ["Profit/SF","$"+(profit/Math.max(sf,1)).toFixed(2)],
+                ["TOTAL/SF","$"+(client/Math.max(sf,1)).toFixed(2)]].map(([l,v],i) => (
+                <div key={l} style={{display:"flex",justifyContent:"space-between",borderTop:i===3?"1px solid "+C.brd:"none",paddingTop:i===3?6:0,fontWeight:i===3?700:400,color:i===3?C.acc:C.txt}}>
+                  <span>{l}</span><span style={{fontFamily:"monospace"}}>{v}</span>
+                </div>
+              ))}
+            </div>
+          </Card>
+        </G2>
+      )}
+
+      {/* STEP 7: Payment */}
+      {step===7 && (
+        <div>
+          <Card>
+            <CardTitle>Payment Schedule</CardTitle>
+            <G2>
+              <Inp label="Deposit %" value={dep} onChange={setDep} type="number" suffix="%" tip="due at signing"/>
+              <Inp label="Withholding %" value={with_} onChange={setWith_} type="number" suffix="%" tip="released after inspection"/>
+            </G2>
+            <CardTitle>Milestones</CardTitle>
+            {milestones.map((m,i) => (
+              <div key={i} style={{display:"flex",gap:8,marginBottom:8}}>
+                <input value={m} onChange={e=>setMilestones(prev=>prev.map((x,j)=>j===i?e.target.value:x))}
+                  style={{...iS(),flex:1}} placeholder={"Milestone "+(i+1)}/>
+                <Btn v="red" sz="sm" onClick={()=>setMilestones(prev=>prev.filter((_,j)=>j!==i))}>X</Btn>
+              </div>
+            ))}
+            <Btn v="ghost" sz="sm" onClick={()=>setMilestones(prev=>[...prev,"New Milestone"])}>+ Add Milestone</Btn>
+          </Card>
+          <Card style={{background:C.sur2}}>
+            <CardTitle>Schedule Preview -- Total: {$(finalTotal)}</CardTitle>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+              <thead>
+                <tr>{["Milestone","%","Amount"].map(h => <th key={h} style={{background:C.sur3,color:C.mut,fontSize:11,textTransform:"uppercase",padding:"8px 12px",textAlign:"left",borderBottom:"1px solid "+C.brd}}>{h}</th>)}</tr>
+              </thead>
+              <tbody>
+                {sched.map((s,i) => (
+                  <tr key={i} style={{borderBottom:"1px solid "+C.brd}}>
+                    <td style={{padding:"9px 12px"}}>{s.name}</td>
+                    <td style={{padding:"9px 12px",fontFamily:"monospace"}}>{s.pct.toFixed(1)}%</td>
+                    <td style={{padding:"9px 12px",fontFamily:"monospace",fontWeight:600,color:C.acc}}>{$(s.amt)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Card>
+        </div>
+      )}
+
+      {/* STEP 8: Review */}
+      {step===8 && (
+        <div>
+          <Card>
+            <CardTitle>Final Summary</CardTitle>
+            <G4>
+              <Stat value={num(totalSF).toLocaleString()+" SF"} label="Living Area"/>
+              <Stat value={$(mat)} label="Materials"/>
+              <Stat value={$(labor)} label="Labor"/>
+              <Stat value={$(client)} label="Client Total" accent/>
+            </G4>
+          </Card>
+          {Object.keys(errors).length > 0 && (
+            <div style={{background:C.red+"22",border:"1px solid "+C.red,borderRadius:10,padding:14,marginBottom:16,fontSize:13,color:C.red}}>
+              Please fix errors before saving: {Object.values(errors).join(", ")}
+            </div>
+          )}
+          <Card>
+            <Txt label="Scope of Work" value={scope} onChange={setScope} rows={4}/>
+            <Txt label="Terms & Conditions" value={terms} onChange={setTerms} rows={3}/>
+          </Card>
+          <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
+            <Btn v="sec" onClick={()=>setStep(7)}>Back</Btn>
+            <Btn sz="lg" onClick={()=>onPreview(mkRecord("mat-labor"))}>Preview Mat+Labor</Btn>
+            <Btn v="sec" sz="lg" onClick={()=>onPreview(mkRecord("labor"))}>Preview Labor Only</Btn>
+            <Btn v="grn" sz="lg" onClick={()=>{ if(validate()) onSave(mkRecord(etype)); }}>Save Estimate</Btn>
+          </div>
+        </div>
+      )}
+
+      {/* Bottom nav */}
+      <div style={{display:"flex",justifyContent:"space-between",marginTop:24}}>
+        {step > 0 ? <Btn v="sec" onClick={()=>setStep(s=>s-1)}>Back</Btn> : <div/>}
+        {step < STEPS.length-1 ? <Btn onClick={()=>setStep(s=>s+1)}>Next: {STEPS[step+1]}</Btn> : <div/>}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// PRICES PAGE
+// ============================================================
+function PricesPage({prices, onSave, regional, onRegional}) {
+  const [P, setP] = useState({...prices});
+  const set = k => v => setP(x=>({...x,[k]:v}));
+  const groups = [
+    {title:"Exterior Wall Lumber", keys:[["stud2x6","2x6 Stud (ea)"],["stud2x4","2x4 Stud (ea)"],["plate2x6","2x6 Plate 16ft (ea)"],["plate2x4","2x4 Plate 16ft (ea)"],["pt_sill","PT Sill Plate 16ft"],["bracing","2x4 Brace 16ft"],["fire_block","2x4 Block 8ft"]]},
+    {title:"Sheathing & Wrap", keys:[["osb_wall","7/16\" OSB Wall Sheet"],["osb_roof","7/16\" OSB Roof Sheet"],["osb_floor","3/4\" T&G Subfloor Sheet"],["housewrap","Housewrap Roll"]]},
+    {title:"Engineered Lumber (per 16ft equiv)", keys:[["lvl_9","LVL 9-1/2\" depth"],["lvl_11","LVL 11-1/4\" depth"],["lvl_14","LVL 14\" depth"],["lvl_16","LVL 16\" depth"],["psl","PSL Parallam"],["steel","Steel Beam"],["tji","TJI Joist (ea)"],["rim_board","LVL Rim Board 16ft"]]},
+    {title:"Roof", keys:[["truss","Truss (ea)"],["rafter","Rafter 16ft"],["ridge","Ridge Board 16ft"],["collar","Collar Tie (ea)"]]},
+    {title:"Finish Lumber", keys:[["fascia","Fascia 16ft"],["fascia10","Fascia 1x10 16ft"],["subfascia","Sub-Fascia 16ft"],["soffit","Soffit Sheet"],["barge","Barge Bd 16ft"],["frieze","Frieze Bd 16ft"],["corner_bd","Corner Boards 16ft"]]},
+    {title:"Hardware", keys:[["nail_box","16d Nails 30lb box"],["screw_box","3\" Screws 250ct"],["h25","Simpson H2.5A Strap"],["lus210","Simpson LUS210 Hanger"],["hd2a","Simpson HD2A Hold-Down"],["post_cap","Post Cap/Base"],["anchor_bolt","Anchor Bolt 1/2\"x10\""],["pl400","PL400 Adhesive Tube"],["beam_hw","Beam Connector Set"],["misc_tie","Misc Framing Tie"]]},
+    {title:"Headers", keys:[["hdr_8","Header 2x8"],["hdr_10","Header 2x10"],["hdr_12","Header 2x12"]]},
+  ];
+  return (
+    <div>
+      <h2 style={{fontWeight:900,fontSize:22,textTransform:"uppercase",letterSpacing:1,marginBottom:20}}>Material Prices & Settings</h2>
+      <Card>
+        <CardTitle>Regional Multiplier</CardTitle>
+        <p style={{fontSize:12,color:C.mut,marginBottom:12}}>Adjusts all material prices for your region. Michigan average = 1.0</p>
+        <div style={{display:"flex",gap:12,alignItems:"center",flexWrap:"wrap"}}>
+          <div style={{flex:"0 0 200px"}}>
+            <Inp label="Multiplier" value={regional} onChange={onRegional} type="number" placeholder="1.00" suffix="x"/>
+          </div>
+          {[["0.90","Low cost area"],["1.00","Michigan avg"],["1.10","Detroit metro"],["1.20","High cost area"]].map(([v,l]) => (
+            <Btn key={v} v="ghost" sz="sm" onClick={()=>onRegional(v)}>{l} ({v}x)</Btn>
+          ))}
+        </div>
+      </Card>
+      {groups.map(g => (
+        <Card key={g.title}>
+          <CardTitle>{g.title}</CardTitle>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:12}}>
+            {g.keys.map(([k,lbl]) => (
+              <Inp key={k} label={lbl} value={P[k]||""} onChange={set(k)} type="number" suffix="$"/>
+            ))}
+          </div>
+        </Card>
+      ))}
+      <div style={{display:"flex",gap:12}}>
+        <Btn sz="lg" onClick={()=>onSave(P)}>Save Prices</Btn>
+        <Btn v="sec" onClick={()=>{ setP({...DEFAULT_PRICES}); onSave({...DEFAULT_PRICES}); }}>Reset to Defaults</Btn>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// DASHBOARD
+// ============================================================
+function Dashboard({clients, estimates, onNew, onView, onToggle}) {
+  const pending  = estimates.filter(e=>e.status==="pending").reduce((s,e)=>s+(e.total||0),0);
+  const approved = estimates.filter(e=>e.status==="approved").reduce((s,e)=>s+(e.total||0),0);
+  const recent   = [...estimates].sort((a,b)=>b.createdAt-a.createdAt).slice(0,15);
+  const TH = {background:C.sur3,color:C.mut,fontSize:11,textTransform:"uppercase",padding:"9px 12px",textAlign:"left",borderBottom:"1px solid "+C.brd};
+  const TD = {padding:"9px 12px"};
+  return (
+    <div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+        <h2 style={{fontWeight:900,fontSize:22,textTransform:"uppercase",letterSpacing:1,margin:0}}>Dashboard</h2>
+        <Btn onClick={onNew}>+ New Estimate</Btn>
+      </div>
+      <G4 style={{marginBottom:16}}>
+        <Stat value={clients.length} label="Clients"/>
+        <Stat value={estimates.length} label="Estimates"/>
+        <Stat value={$(pending)} label="Pending"/>
+        <Stat value={$(approved)} label="Approved" accent/>
+      </G4>
+      <Card>
+        <CardTitle>Recent Estimates</CardTitle>
+        {!recent.length ? (
+          <div style={{textAlign:"center",padding:"32px",color:C.mut}}>
+            <div style={{fontSize:36,marginBottom:8}}>📋</div>
+            <p>No estimates yet</p>
+            <Btn onClick={onNew} style={{marginTop:12}}>Create First Estimate</Btn>
+          </div>
+        ) : (
+          <div style={{overflowX:"auto"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+              <thead>
+                <tr>{["Est #","Client","Type","SF","Materials","Labor","Total","Status",""].map(h=><th key={h} style={TH}>{h}</th>)}</tr>
+              </thead>
+              <tbody>
+                {recent.map(e => (
+                  <tr key={e.id} style={{borderBottom:"1px solid "+C.brd}}>
+                    <td style={{...TD,fontFamily:"monospace",fontSize:12}}>{e.number}</td>
+                    <td style={TD}>{e.clientName}</td>
+                    <td style={TD}><Badge label={e.etype==="labor"?"Labor":"Mat+Labor"} color="blu"/></td>
+                    <td style={{...TD,fontFamily:"monospace"}}>{(e.totalSF||0).toLocaleString()}</td>
+                    <td style={{...TD,fontFamily:"monospace"}}>{$(e.matCost||0)}</td>
+                    <td style={{...TD,fontFamily:"monospace"}}>{$(e.laborCost||0)}</td>
+                    <td style={{...TD,fontFamily:"monospace",fontWeight:700,color:C.acc}}>{$(e.total||0)}</td>
+                    <td style={TD}><Badge label={e.status} color={e.status==="approved"?"grn":"yel"}/></td>
+                    <td style={TD}>
+                      <div style={{display:"flex",gap:6}}>
+                        <Btn sz="sm" v="sec" onClick={()=>onView(e.id)}>View</Btn>
+                        <Btn sz="sm" v="ghost" onClick={()=>onToggle(e.id)}>{e.status==="approved"?"Revert":"Approve"}</Btn>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+// ============================================================
+// CLIENTS
+// ============================================================
+function ClientsList({clients, estimates, onAdd, onView}) {
+  return (
+    <div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+        <h2 style={{fontWeight:900,fontSize:22,textTransform:"uppercase",letterSpacing:1,margin:0}}>Clients</h2>
+        <Btn onClick={onAdd}>+ Add Client</Btn>
+      </div>
+      {!clients.length ? (
+        <Card style={{textAlign:"center",padding:48,color:C.mut}}>
+          <div style={{fontSize:40,marginBottom:8}}>👷</div>
+          <p>No clients yet</p>
+          <Btn onClick={onAdd} style={{marginTop:12}}>Add First Client</Btn>
+        </Card>
+      ) : clients.map(c => {
+        const ests = estimates.filter(e=>e.cid===c.id);
+        const tot  = ests.reduce((s,e)=>s+(e.total||0),0);
+        return (
+          <div key={c.id} onClick={()=>onView(c.id)}
+            style={{background:C.sur,border:"1px solid "+C.brd,borderRadius:12,padding:20,marginBottom:12,cursor:"pointer"}}
+            onMouseEnter={e=>e.currentTarget.style.borderColor=C.acc}
+            onMouseLeave={e=>e.currentTarget.style.borderColor=C.brd}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+              <div>
+                <div style={{fontWeight:700,fontSize:16}}>{c.fname} {c.lname}</div>
+                <div style={{color:C.mut,fontSize:13,marginTop:2}}>{c.address||"No address"}</div>
+                <div style={{display:"flex",gap:10,marginTop:8,flexWrap:"wrap",alignItems:"center"}}>
+                  <Badge label={ests.length+" estimate"+(ests.length!==1?"s":"")} color="blu"/>
+                  {c.phone && <span style={{fontSize:12,color:C.mut}}>{c.phone}</span>}
+                  {c.email && <span style={{fontSize:12,color:C.mut}}>{c.email}</span>}
+                </div>
+              </div>
+              <div style={{textAlign:"right"}}>
+                <div style={{fontWeight:900,fontSize:22,color:C.acc}}>{$(tot)}</div>
+                <div style={{fontSize:11,color:C.mut}}>total</div>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ClientForm({initial, onSave, onBack}) {
+  const [f,setF] = useState({fname:"",lname:"",phone:"",email:"",address:"",notes:"",...initial});
+  const set = k => v => setF(x=>({...x,[k]:v}));
+  return (
+    <div>
+      <BackBtn onClick={onBack} label="Back to Clients"/>
+      <Card>
+        <CardTitle>{initial.id?"Edit Client":"New Client"}</CardTitle>
+        <G2>
+          <Inp label="First Name" value={f.fname} onChange={set("fname")} placeholder="John"/>
+          <Inp label="Last Name"  value={f.lname} onChange={set("lname")} placeholder="Doe"/>
+          <Inp label="Phone" value={f.phone} onChange={set("phone")} placeholder="(555) 000-0000"/>
+          <Inp label="Email" value={f.email} onChange={set("email")} placeholder="john@email.com" type="email"/>
+        </G2>
+        <Inp label="Project Address" value={f.address} onChange={set("address")} placeholder="123 Main St, City, ST ZIP"/>
+        <Txt label="Notes" value={f.notes} onChange={set("notes")} placeholder="Project notes, lot number, etc."/>
+        <Btn sz="lg" onClick={()=>{ if(!f.fname.trim()||!f.lname.trim()){alert("Name required");return;} onSave(f); }}>
+          Save Client
+        </Btn>
+      </Card>
+    </div>
+  );
+}
+
+function ClientDetail({client, estimates, onBack, onEdit, onNew, onView}) {
+  const ests = estimates.filter(e=>e.cid===client.id).sort((a,b)=>b.createdAt-a.createdAt);
+  const TH = {background:C.sur3,color:C.mut,fontSize:11,textTransform:"uppercase",padding:"9px 12px",textAlign:"left",borderBottom:"1px solid "+C.brd};
+  const TD = {padding:"9px 12px"};
+  return (
+    <div>
+      <BackBtn onClick={onBack} label="Back to Clients"/>
+      <Card>
+        <div style={{display:"flex",justifyContent:"space-between",flexWrap:"wrap",gap:12}}>
+          <div>
+            <div style={{fontWeight:900,fontSize:22}}>{client.fname} {client.lname}</div>
+            <div style={{color:C.mut,fontSize:14,marginTop:4}}>{client.address||"No address on file"}</div>
+            <div style={{display:"flex",gap:16,marginTop:8,flexWrap:"wrap",fontSize:13}}>
+              {client.phone && <span>{client.phone}</span>}
+              {client.email && <span style={{color:C.mut}}>{client.email}</span>}
+            </div>
+            {client.notes && <div style={{marginTop:10,fontSize:13,color:C.mut,background:C.sur2,padding:"8px 12px",borderRadius:8}}>{client.notes}</div>}
+          </div>
+          <div style={{display:"flex",gap:8}}>
+            <Btn v="sec" sz="sm" onClick={onEdit}>Edit</Btn>
+            <Btn sz="sm" onClick={onNew}>+ New Estimate</Btn>
+          </div>
+        </div>
+      </Card>
+      <Card>
+        <CardTitle>Estimates ({ests.length})</CardTitle>
+        {!ests.length ? (
+          <div style={{textAlign:"center",padding:24,color:C.mut}}>
+            <p style={{marginBottom:12}}>No estimates yet.</p>
+            <Btn onClick={onNew}>Create Estimate</Btn>
+          </div>
+        ) : (
+          <div style={{overflowX:"auto"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+              <thead>
+                <tr>{["Est #","Date","Type","SF","Materials","Labor","Total","Status",""].map(h=><th key={h} style={TH}>{h}</th>)}</tr>
+              </thead>
+              <tbody>
+                {ests.map(e => (
+                  <tr key={e.id} style={{borderBottom:"1px solid "+C.brd}}>
+                    <td style={{...TD,fontFamily:"monospace",fontSize:12}}>{e.number}</td>
+                    <td style={TD}>{e.date}</td>
+                    <td style={TD}><Badge label={e.etype==="labor"?"Labor":"Mat+Labor"} color="blu"/></td>
+                    <td style={{...TD,fontFamily:"monospace"}}>{(e.totalSF||0).toLocaleString()}</td>
+                    <td style={{...TD,fontFamily:"monospace"}}>{$(e.matCost||0)}</td>
+                    <td style={{...TD,fontFamily:"monospace"}}>{$(e.laborCost||0)}</td>
+                    <td style={{...TD,fontFamily:"monospace",fontWeight:700,color:C.acc}}>{$(e.total||0)}</td>
+                    <td style={TD}><Badge label={e.status} color={e.status==="approved"?"grn":"yel"}/></td>
+                    <td style={TD}><Btn sz="sm" v="sec" onClick={()=>onView(e.id)}>View</Btn></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+function EstimateView({est, co, onBack}) {
+  const [viewType,setViewType] = useState(est.etype);
+  return (
+    <div>
+      <BackBtn onClick={onBack}/>
+      <div style={{display:"flex",gap:10,marginBottom:20,flexWrap:"wrap",alignItems:"center"}}>
+        <div style={{fontWeight:700,fontSize:15,flex:1}}>#{est.number} -- {est.clientName}</div>
+        <Btn v="sec" sz="sm" onClick={()=>setViewType(t=>t==="labor"?"mat-labor":"labor")}>
+          Switch: {viewType==="labor"?"Show Mat+Labor":"Show Labor Only"}
+        </Btn>
+        <Btn v="sec" sz="sm" onClick={()=>window.print()}>Print / PDF</Btn>
+      </div>
+      <EstDoc est={{...est,etype:viewType}} co={co}/>
+    </div>
+  );
+}
+
+function SettingsPage({settings, onSave, onExport, onImport}) {
+  const [f,setF] = useState({...settings});
+  const set = k => v => setF(x=>({...x,[k]:v}));
+  const fileRef = useRef();
+  return (
+    <div>
+      <h2 style={{fontWeight:900,fontSize:22,textTransform:"uppercase",letterSpacing:1,marginBottom:20}}>Settings</h2>
+      <G2>
+        <Card>
+          <CardTitle>Company Info</CardTitle>
+          <Inp label="Company Name"  value={f.name||""}    onChange={set("name")}    placeholder="Your Framing Co."/>
+          <Inp label="License #"     value={f.license||""} onChange={set("license")} placeholder="LIC-123456"/>
+          <Inp label="Phone"         value={f.phone||""}   onChange={set("phone")}   placeholder="(555) 000-0000"/>
+          <Inp label="Email"         value={f.email||""}   onChange={set("email")}   placeholder="you@company.com"/>
+          <Inp label="Address"       value={f.address||""} onChange={set("address")} placeholder="123 Shop St, City, ST"/>
+          <Btn onClick={()=>onSave(f)}>Save Settings</Btn>
+        </Card>
+        <Card>
+          <CardTitle>Backup & Restore</CardTitle>
+          <p style={{fontSize:12,color:C.mut,marginBottom:14}}>Export your entire database (all clients, estimates, settings) to a JSON file. Import to restore or move to another device.</p>
+          <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+            <Btn v="grn" onClick={onExport}>Export JSON Backup</Btn>
+            <Btn v="sec" onClick={()=>fileRef.current.click()}>Import JSON Backup</Btn>
+          </div>
+          <input ref={fileRef} type="file" accept=".json" style={{display:"none"}}
+            onChange={e=>{ const f=e.target.files[0]; if(f){ const r=new FileReader(); r.onload=ev=>onImport(ev.target.result); r.readAsText(f); } }}/>
+          <Hr/>
+          <CardTitle>About ProFrame</CardTitle>
+          <p style={{fontSize:12,color:C.mut,lineHeight:1.7}}>
+            v3.0 -- Industry-standard framing takeoff calculator.<br/>
+            2x6 exterior / 2x4 interior tracked separately.<br/>
+            All LVL/PSL/Steel entered per piece.<br/>
+            Uses 1.15x waste on studs, 1.10x on plates/sheathing.<br/>
+            Data saved automatically to browser localStorage.
+          </p>
+        </Card>
+      </G2>
+    </div>
+  );
+}
+
+// ============================================================
+// ROOT APP
+// ============================================================
+function App() {
+  const saved = loadLS() || {};
+  const [page,setPage]         = useState("dashboard");
+  const [clients,setClients]   = useState(saved.clients   || []);
+  const [estimates,setEstimates]= useState(saved.estimates || []);
+  const [settings,setSettings] = useState(saved.settings  || {name:"ProFrame LLC",license:"",phone:"",email:"",address:""});
+  const [prices,setPrices]     = useState(saved.prices    || {...DEFAULT_PRICES});
+  const [regional,setRegional] = useState(saved.regional  || "1.0");
+  const [selClientId,setSelClientId] = useState(null);
+  const [editClient,setEditClient]   = useState(null);
+  const [viewEstId,setViewEstId]     = useState(null);
+  const [estBack,setEstBack]         = useState("dashboard");
+  const [preClientId,setPreClientId] = useState(null);
+  const [toast,setToast]             = useState(null);
+
+  // Apply regional multiplier to prices
+  const effectivePrices = Object.fromEntries(
+    Object.entries(prices).map(([k,v]) => [k, num(v)*num(regional)||num(v)])
+  );
+
+  // Auto-save to localStorage whenever data changes
+  useEffect(() => {
+    saveLS({clients, estimates, settings, prices, regional});
+  }, [clients, estimates, settings, prices, regional]);
+
+  function showToast(msg, ok=true) {
+    setToast({msg,ok});
+    setTimeout(()=>setToast(null), 3000);
+  }
+
+  function saveClient(f) {
+    if (f.id) {
+      setClients(prev=>prev.map(c=>c.id===f.id?{...c,...f}:c));
+    } else {
+      const newId = uid();
+      f = {...f, id:newId};
+      setClients(prev=>[...prev,f]);
+    }
+    showToast("Client saved!");
+    setPage("clients");
+  }
+
+  function saveEstimate(est) {
+    setEstimates(prev=>[...prev,est]);
+    showToast("Estimate saved!");
+    if (est.cid) { setSelClientId(est.cid); setPage("clientDetail"); }
+    else setPage("dashboard");
+  }
+
+  function previewEstimate(est) {
+    const pe = {...est, id:"__preview__"};
+    setEstimates(prev=>[...prev.filter(e=>e.id!=="__preview__"), pe]);
+    setViewEstId("__preview__");
+    setEstBack("newEstimate");
+    setPage("estimateView");
+  }
+
+  function viewEstimate(id, backTo) {
+    setViewEstId(id);
+    setEstBack(backTo||"dashboard");
+    setPage("estimateView");
+  }
+
+  function toggleStatus(id) {
+    setEstimates(prev=>prev.map(e=>e.id===id?{...e,status:e.status==="approved"?"pending":"approved"}:e));
+  }
+
+  function exportData() {
+    const data = JSON.stringify({clients,estimates,settings,prices,regional}, null, 2);
+    const blob = new Blob([data], {type:"application/json"});
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement("a");
+    a.href = url;
+    a.download = "proframe-backup-"+new Date().toISOString().split("T")[0]+".json";
+    a.click();
+    URL.revokeObjectURL(url);
+    showToast("Backup exported!");
+  }
+
+  function importData(text) {
+    try {
+      const d = JSON.parse(text);
+      if (d.clients)   setClients(d.clients);
+      if (d.estimates) setEstimates(d.estimates);
+      if (d.settings)  setSettings(d.settings);
+      if (d.prices)    setPrices(d.prices);
+      if (d.regional)  setRegional(d.regional);
+      showToast("Data imported successfully!");
+    } catch(e) {
+      showToast("Import failed - invalid file", false);
+    }
+  }
+
+  function savePrices(P) {
+    setPrices(P);
+    showToast("Prices saved!");
+    setPage("settings");
+  }
+
+  const viewingEst = estimates.find(e=>e.id===viewEstId);
+  const selClient  = clients.find(c=>c.id===selClientId);
+
+  function NavBtn({pid, label}) {
+    return (
+      <button onClick={()=>setPage(pid)}
+        style={{background:"none",border:"none",color:page===pid?C.acc:C.mut,
+          padding:"0 14px",cursor:"pointer",fontFamily:"inherit",fontSize:13,fontWeight:700,
+          borderBottom:"2px solid "+(page===pid?C.acc:"transparent"),
+          height:56,transition:"color .2s"}}>
+        {label}
+      </button>
+    );
+  }
+
+  return (
+    <div style={{background:C.bg,minHeight:"100vh",color:C.txt}}>
+      {/* Nav */}
+      <div id="topbar" style={{background:C.sur,borderBottom:"2px solid "+C.acc,
+        padding:"0 24px",height:56,display:"flex",alignItems:"center",justifyContent:"space-between",
+        position:"sticky",top:0,zIndex:100}}>
+        <div style={{fontWeight:900,fontSize:20,letterSpacing:3,color:C.acc,textTransform:"uppercase"}}>
+          Pro<span style={{color:C.acc2}}>Frame</span>
+          <span style={{fontSize:10,color:C.mut,marginLeft:10,fontWeight:400,letterSpacing:1}}>v3.0</span>
+        </div>
+        <div id="nav" style={{display:"flex",height:"100%"}}>
+          <NavBtn pid="dashboard"   label="Dashboard"/>
+          <NavBtn pid="clients"     label="Clients"/>
+          <NavBtn pid="newEstimate" label="New Estimate"/>
+          <NavBtn pid="prices"      label="Prices"/>
+          <NavBtn pid="settings"    label="Settings"/>
+        </div>
+      </div>
+
+      <div style={{padding:24,maxWidth:1340,margin:"0 auto"}}>
+
+        {page==="dashboard" && (
+          <Dashboard clients={clients} estimates={estimates}
+            onNew={()=>{setPreClientId(null);setPage("newEstimate");}}
+            onView={id=>viewEstimate(id,"dashboard")}
+            onToggle={toggleStatus}/>
+        )}
+
+        {page==="clients" && (
+          <ClientsList clients={clients} estimates={estimates}
+            onAdd={()=>{setEditClient(null);setPage("clientForm");}}
+            onView={id=>{setSelClientId(id);setPage("clientDetail");}}/>
+        )}
+
+        {page==="clientForm" && (
+          <ClientForm initial={editClient||{}} onSave={saveClient} onBack={()=>setPage("clients")}/>
+        )}
+
+        {page==="clientDetail" && selClient && (
+          <ClientDetail client={selClient} estimates={estimates}
+            onBack={()=>setPage("clients")}
+            onEdit={()=>{setEditClient(selClient);setPage("clientForm");}}
+            onNew={()=>{setPreClientId(selClient.id);setPage("newEstimate");}}
+            onView={id=>viewEstimate(id,"clientDetail")}/>
+        )}
+
+        {page==="newEstimate" && (
+          <Wizard clients={clients} preClientId={preClientId}
+            onSave={saveEstimate}
+            onBack={()=>setPage(preClientId?"clientDetail":"dashboard")}
+            onPreview={previewEstimate}
+            prices={effectivePrices}/>
+        )}
+
+        {page==="estimateView" && viewingEst && (
+          <EstimateView est={viewingEst} co={settings} onBack={()=>setPage(estBack)}/>
+        )}
+
+        {page==="prices" && (
+          <PricesPage prices={prices} onSave={savePrices} regional={regional} onRegional={setRegional}/>
+        )}
+
+        {page==="settings" && (
+          <SettingsPage settings={settings} onSave={s=>{setSettings(s);showToast("Settings saved!");}}
+            onExport={exportData} onImport={importData}/>
+        )}
+      </div>
+
+      {toast && (
+        <div style={{position:"fixed",bottom:24,right:24,
+          background:toast.ok?C.grn+"22":C.red+"22",
+          border:"1px solid "+(toast.ok?C.grn:C.red),
+          borderRadius:10,padding:"12px 20px",fontSize:13,color:C.txt,
+          zIndex:999,display:"flex",alignItems:"center",gap:8,
+          boxShadow:"0 8px 32px #0008"}}>
+          {toast.ok?"OK":"ERR"} {toast.msg}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const container = document.getElementById("root");
+const root = ReactDOM.createRoot(container);
+root.render(React.createElement(App));
+</script>
+</body>
+</html>
