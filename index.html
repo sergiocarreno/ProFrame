@@ -1053,35 +1053,90 @@ function EstimateEditor({clients, est, onSave, onCancel, prices, onToast}) {
   }
 
   function parseGrok() {
-    if(!grokText.trim()){setGrokMsg("Paste Grok response first.");return;}
-    let parsed = null;
-    // Try JSON parse first
-    try {
-      const clean = grokText.replace(/```json|```/g,"").trim();
-      const arr = JSON.parse(clean);
-      if(Array.isArray(arr) && arr.length > 0) {
-        parsed = arr.map(item=>({
-          id:uid(),
-          description: item.description||item.name||item.item||"",
-          qty: String(item.qty||item.quantity||1),
-          unit: item.unit||"ea",
-          price: String(item.price||item.unit_price||item.unitPrice||
-            smartLookup(item.description||"",prices)?.price||"0"),
-          category: item.category||"Other",
-          note: item.note||item.notes||item.location||""
-        }));
-      }
-    } catch(err) {}
-
-    if(parsed && parsed.length > 0) {
-      setE(prev=>({...prev, items:parsed}));
-      setGrokMsg(`✓ Imported ${parsed.length} items from Grok JSON. Review and adjust prices below.`);
-      setTab("materials");
-    } else {
-      setGrokMsg("Could not parse JSON. Make sure you copied the full Grok response. See prompt instructions.");
-    }
+  if (!grokText.trim()) {
+    setGrokMsg("Paste Grok response first.");
+    return;
   }
 
+  let parsedMaterials = [];
+  let suggestedSF = "";
+  let summaryNote = "";
+
+  try {
+    // Clean up common markdown junk
+    const clean = grokText
+      .replace(/```json|```/g, "")
+      .replace(/^[\s\S]*?\[/, "[")   // remove anything before the array
+      .replace(/\][\s\S]*$/, "]")    // remove anything after the array
+      .trim();
+
+    const arr = JSON.parse(clean);
+
+    if (Array.isArray(arr) && arr.length > 0) {
+      arr.forEach(item => {
+        // Normal material item
+        if (item.description && item.qty) {
+          parsedMaterials.push({
+            id: uid(),
+            description: item.description || item.name || item.item || "",
+            qty: String(item.qty || item.quantity || 1),
+            unit: item.unit || "ea",
+            price: String(
+              item.price ||
+              item.unit_price ||
+              item.unitPrice ||
+              smartLookup(item.description || "", prices)?.price ||
+              "0"
+            ),
+            category: item.category || "Other",
+            note: item.note || item.notes || item.location || ""
+          });
+        }
+        // Summary object (the new part we care about)
+        else if (item.type === "summary") {
+          // Prefer heated SF → total SF → first available number
+          suggestedSF =
+            String(item.estimated_heated_sf) ||
+            String(item.estimated_total_sf) ||
+            String(item.estimated_sf || "") ||
+            "";
+
+          summaryNote = item.note || "";
+
+          // Optional: you could collect more fields later (garage, porch, etc.)
+        }
+      });
+
+      if (parsedMaterials.length > 0) {
+        setE(prev => ({
+          ...prev,
+          items: parsedMaterials,
+          // Auto-fill Total Living SF if we found a good number
+          totalSF: suggestedSF || prev.totalSF,
+          // Optional: add the note to scope or somewhere visible
+          scope: prev.scope
+            ? prev.scope + (summaryNote ? `\n\nGrok SF estimate: ${summaryNote}` : "")
+            : summaryNote
+        }));
+
+        let msg = `✓ Imported ${parsedMaterials.length} material items`;
+        if (suggestedSF) {
+          msg += ` — suggested ${suggestedSF} SF (auto-filled)`;
+        }
+        if (summaryNote) {
+          msg += `. Note: ${summaryNote}`;
+        }
+        setGrokMsg(msg);
+        setTab("materials");
+      } else {
+        setGrokMsg("Found no valid material items in the JSON.");
+      }
+    }
+  } catch (err) {
+    console.error("JSON parse error:", err);
+    setGrokMsg("Could not parse JSON. Make sure it's a valid array. Error: " + err.message);
+  }
+}
   function handleSave() {
     if(!e.clientName.trim()) { onToast("Enter client name","err"); return; }
     if(!e.totalSF || num(e.totalSF)<=0) { onToast("Enter total square footage","err"); return; }
