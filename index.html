@@ -567,7 +567,10 @@ function EstDoc({est, co}) {
   const isL  = est.etype==="labor";
   const total= isL ? est.laborCost : est.clientTotal;
   const sched= paySchedule(total, est.dep, est.with_, est.milestones||[]);
-  const cats = est.calc?.cats||[];
+  // Always recalc cats fresh from saved spec data so material list always shows
+  const cats = (est.calc?.cats||[]).length > 0
+    ? est.calc.cats
+    : calcMaterials(est, DEFAULT_PRICES).cats;
   const W  = {background:"#fff",color:"#111",borderRadius:12,padding:"36px 44px",maxWidth:820,margin:"0 auto",fontFamily:"'Segoe UI',system-ui,sans-serif",lineHeight:1.6,fontSize:13};
   const TH = {background:"#f0f0f0",padding:"6px 10px",textAlign:"left",fontWeight:700,border:"1px solid #ddd",fontSize:12};
   const TD = {padding:"6px 10px",border:"1px solid #ddd",fontSize:12};
@@ -852,7 +855,8 @@ function Wizard({clients, preClientId, onSave, onBack, onPreview, prices}) {
     if (parsed.trussQty) { setTrussQty(parsed.trussQty);  count++; }
     if (parsed.lvls && parsed.lvls.length) { setLvls(parsed.lvls); count++; }
     if (parsed.stairRuns && parsed.stairRuns.length) { setStairRuns(parsed.stairRuns); count++; }
-    setGrokMsg(count > 0 ? "Filled " + count + " fields from Grok output! Review each tab." : "Could not find matching data. Check the format.");
+    setGrokMsg(count > 0 ? "Filled " + count + " fields! Review tabs below -- check each section." : "Could not find matching data. Check the format.");
+    if (count > 0) setStep(1);
   }
 
   function mkSpec() {
@@ -971,7 +975,14 @@ Format as numbered list by section with exact dimensions.`;
         </div>
         {showGrok && (
           <div style={{marginTop:12}}>
-            <p style={{fontSize:12,color:C.mut,marginBottom:8}}>1. Copy the prompt below. 2. Send to Grok with your plans. 3. Paste Grok response and click Apply.</p>
+            <p style={{fontSize:12,color:C.mut,marginBottom:8}}>
+              <b style={{color:C.txt}}>How to use:</b> 1) Click "Copy" to copy the prompt below.
+              2) Go to grok.com, attach your PDF plans, paste the prompt, send it.
+              3) Copy Grok's full text response (not JSON — just the plain text).
+              4) Paste it in the box below and click Apply.
+              The app will auto-fill wall LF, windows, roof, stairs, and more.
+              You do NOT need JSON format — plain text works fine.
+            </p>
             <div style={{background:C.sur3,borderRadius:8,padding:12,marginBottom:10,position:"relative"}}>
               <pre style={{fontSize:10,color:C.mut,lineHeight:1.5,whiteSpace:"pre-wrap",fontFamily:"monospace"}}>{GROK_PROMPT}</pre>
               <Btn sz="sm" v="sec" style={{position:"absolute",top:8,right:8}}
@@ -1435,7 +1446,7 @@ function PricesPage({prices, onSave, regional, onRegional}) {
 // ============================================================
 // DASHBOARD
 // ============================================================
-function Dashboard({clients, estimates, onNew, onView, onToggle}) {
+function Dashboard({clients, estimates, onNew, onView, onToggle, onDelete}) {
   const pending  = estimates.filter(e=>e.status==="pending").reduce((s,e)=>s+(e.total||0),0);
   const approved = estimates.filter(e=>e.status==="approved").reduce((s,e)=>s+(e.total||0),0);
   const recent   = [...estimates].sort((a,b)=>b.createdAt-a.createdAt).slice(0,15);
@@ -1482,6 +1493,7 @@ function Dashboard({clients, estimates, onNew, onView, onToggle}) {
                       <div style={{display:"flex",gap:6}}>
                         <Btn sz="sm" v="sec" onClick={()=>onView(e.id)}>View</Btn>
                         <Btn sz="sm" v="ghost" onClick={()=>onToggle(e.id)}>{e.status==="approved"?"Revert":"Approve"}</Btn>
+                        <Btn sz="sm" v="red" onClick={()=>onDelete(e.id)}>Delete</Btn>
                       </div>
                     </td>
                   </tr>
@@ -1565,7 +1577,7 @@ function ClientForm({initial, onSave, onBack}) {
   );
 }
 
-function ClientDetail({client, estimates, onBack, onEdit, onNew, onView}) {
+function ClientDetail({client, estimates, onBack, onEdit, onNew, onView, onDelete}) {
   const ests = estimates.filter(e=>e.cid===client.id).sort((a,b)=>b.createdAt-a.createdAt);
   const TH = {background:C.sur3,color:C.mut,fontSize:11,textTransform:"uppercase",padding:"9px 12px",textAlign:"left",borderBottom:"1px solid "+C.brd};
   const TD = {padding:"9px 12px"};
@@ -1613,7 +1625,12 @@ function ClientDetail({client, estimates, onBack, onEdit, onNew, onView}) {
                     <td style={{...TD,fontFamily:"monospace"}}>{$(e.laborCost||0)}</td>
                     <td style={{...TD,fontFamily:"monospace",fontWeight:700,color:C.acc}}>{$(e.total||0)}</td>
                     <td style={TD}><Badge label={e.status} color={e.status==="approved"?"grn":"yel"}/></td>
-                    <td style={TD}><Btn sz="sm" v="sec" onClick={()=>onView(e.id)}>View</Btn></td>
+                    <td style={TD}>
+                      <div style={{display:"flex",gap:6}}>
+                        <Btn sz="sm" v="sec" onClick={()=>onView(e.id)}>View</Btn>
+                        <Btn sz="sm" v="red" onClick={()=>onDelete(e.id)}>Delete</Btn>
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -1625,8 +1642,16 @@ function ClientDetail({client, estimates, onBack, onEdit, onNew, onView}) {
   );
 }
 
-function EstimateView({est, co, onBack}) {
+function EstimateView({est, co, onBack, onDelete}) {
   const [viewType,setViewType] = useState(est.etype);
+  const [showMat, setShowMat]  = useState(false);
+  const cats = (est.calc?.cats||[]).length > 0
+    ? est.calc.cats
+    : calcMaterials(est, DEFAULT_PRICES).cats;
+  const isLabor = viewType === "labor";
+  const total = isLabor ? est.laborCost : est.clientTotal;
+  const TH = {background:C.sur3,color:C.mut,fontSize:11,textTransform:"uppercase",padding:"8px 10px",textAlign:"left",borderBottom:"1px solid "+C.brd};
+  const TD = {padding:"8px 10px",fontSize:13};
   return (
     <div>
       <BackBtn onClick={onBack}/>
@@ -1635,8 +1660,72 @@ function EstimateView({est, co, onBack}) {
         <Btn v="sec" sz="sm" onClick={()=>setViewType(t=>t==="labor"?"mat-labor":"labor")}>
           Switch: {viewType==="labor"?"Show Mat+Labor":"Show Labor Only"}
         </Btn>
+        <Btn v="sec" sz="sm" onClick={()=>setShowMat(v=>!v)}>
+          {showMat ? "Hide Material List" : "Show Material List"}
+        </Btn>
         <Btn v="sec" sz="sm" onClick={()=>window.print()}>Print / PDF</Btn>
+        {est.id !== "__preview__" && (
+          <Btn v="red" sz="sm" onClick={()=>onDelete(est.id)}>Delete Estimate</Btn>
+        )}
       </div>
+
+      {/* Material list shown in dark UI */}
+      {showMat && !isLabor && (
+        <div style={{marginBottom:24}}>
+          <Card>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+              <CardTitle>Material Takeoff — {est.clientName}</CardTitle>
+              <div style={{fontWeight:700,color:C.acc,fontSize:16}}>{$(est.matCost)}</div>
+            </div>
+            {cats.length === 0 && (
+              <div style={{color:C.red,fontSize:13,padding:12}}>
+                No material data found. This estimate may have been saved without wall measurements filled in. Create a new estimate with wall LF entered to generate a full takeoff.
+              </div>
+            )}
+            {cats.map(cat => (
+              <div key={cat.name} style={{marginBottom:20}}>
+                <div style={{fontWeight:800,fontSize:12,textTransform:"uppercase",letterSpacing:.5,
+                  color:C.acc,borderBottom:"1px solid "+C.brd,paddingBottom:6,marginBottom:8}}>
+                  {cat.name} — {$(cat.sub)}
+                </div>
+                <div style={{overflowX:"auto"}}>
+                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+                    <thead>
+                      <tr>
+                        <th style={TH}>Description</th>
+                        <th style={{...TH,width:50,textAlign:"center"}}>Qty</th>
+                        <th style={{...TH,width:80}}>Unit</th>
+                        <th style={{...TH,width:85,textAlign:"right"}}>Unit $</th>
+                        <th style={{...TH,width:95,textAlign:"right"}}>Total</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {cat.items.map((m,i) => (
+                        <tr key={i} style={{borderBottom:"1px solid "+C.brd,background:i%2===0?C.sur:C.sur2}}>
+                          <td style={TD}>{m.desc}</td>
+                          <td style={{...TD,textAlign:"center",fontFamily:"monospace"}}>{m.qty}</td>
+                          <td style={{...TD,color:C.mut,fontSize:11}}>{m.unit}</td>
+                          <td style={{...TD,textAlign:"right",fontFamily:"monospace"}}>${m.cost.toFixed(2)}</td>
+                          <td style={{...TD,textAlign:"right",fontFamily:"monospace",fontWeight:600,color:C.txt}}>${fmt(m.qty*m.cost)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ))}
+            {cats.length > 0 && (
+              <div style={{display:"flex",justifyContent:"flex-end",marginTop:8}}>
+                <div style={{background:C.sur3,border:"1px solid "+C.acc,borderRadius:8,padding:"10px 20px",fontWeight:900,fontSize:16,color:C.acc}}>
+                  TOTAL MATERIALS: {$(est.matCost)}
+                </div>
+              </div>
+            )}
+          </Card>
+        </div>
+      )}
+
+      {/* Print-ready white document */}
       <EstDoc est={{...est,etype:viewType}} co={co}/>
     </div>
   );
@@ -1753,6 +1842,13 @@ function App() {
     setEstimates(prev=>prev.map(e=>e.id===id?{...e,status:e.status==="approved"?"pending":"approved"}:e));
   }
 
+  function deleteEstimate(id) {
+    if (!window.confirm("Delete this estimate? This cannot be undone.")) return;
+    setEstimates(prev=>prev.filter(e=>e.id!==id));
+    showToast("Estimate deleted.");
+    if (page==="estimateView") setPage(estBack);
+  }
+
   function exportData() {
     const data = JSON.stringify({clients,estimates,settings,prices,regional}, null, 2);
     const blob = new Blob([data], {type:"application/json"});
@@ -1825,7 +1921,8 @@ function App() {
           <Dashboard clients={clients} estimates={estimates}
             onNew={()=>{setPreClientId(null);setPage("newEstimate");}}
             onView={id=>viewEstimate(id,"dashboard")}
-            onToggle={toggleStatus}/>
+            onToggle={toggleStatus}
+            onDelete={deleteEstimate}/>
         )}
 
         {page==="clients" && (
@@ -1843,7 +1940,8 @@ function App() {
             onBack={()=>setPage("clients")}
             onEdit={()=>{setEditClient(selClient);setPage("clientForm");}}
             onNew={()=>{setPreClientId(selClient.id);setPage("newEstimate");}}
-            onView={id=>viewEstimate(id,"clientDetail")}/>
+            onView={id=>viewEstimate(id,"clientDetail")}
+            onDelete={deleteEstimate}/>
         )}
 
         {page==="newEstimate" && (
@@ -1855,7 +1953,7 @@ function App() {
         )}
 
         {page==="estimateView" && viewingEst && (
-          <EstimateView est={viewingEst} co={settings} onBack={()=>setPage(estBack)}/>
+          <EstimateView est={viewingEst} co={settings} onBack={()=>setPage(estBack)} onDelete={deleteEstimate}/>
         )}
 
         {page==="prices" && (
