@@ -176,17 +176,18 @@ function detectBoardLength(desc) {
 }
 
 // ─── GROK JSON PROMPT ────────────────────────────────────────────────────────
-const GROK_PROMPT = `You are analyzing residential framing plans. Extract ALL quantities and return ONLY a JSON array — no other text, no markdown, no explanation. Each item must have exactly these fields:
+const GROK_PROMPT = `You are analyzing residential framing plans. Extract ALL quantities and return ONLY a JSON array — no other text, no markdown, no explanation.
 
-[
-  {
-    "description": "2x6x92-5/8 Stud",
-    "qty": 280,
-    "unit": "ea",
-    "category": "Exterior Walls",
-    "note": "Floor 1 ext walls 16in OC"
-  }
-]
+The array should contain material objects first, then one or more special "summary" objects at the very end.
+
+Each material item must have exactly these fields:
+{
+  "description": "2x6x92-5/8 Stud",
+  "qty": 280,
+  "unit": "ea",
+  "category": "Exterior Walls",
+  "note": "Floor 1 ext walls 16in OC"
+}
 
 Categories must be one of: "Exterior Walls", "Interior Walls", "Floor System", "Roof Framing", "Engineered Lumber", "Headers", "Finish Lumber", "Stairs", "Hardware & Fasteners"
 
@@ -209,8 +210,23 @@ Extract every framing member including:
 - Nails, screws, adhesive
 
 Use standard lumber descriptions like "2x6x92-5/8 Stud", "2x4x16 Plate", "1.75x9.5 LVL 20ft", "Roof Truss 30ft span"
-Be exact with quantities. Include waste factors: 1.15 for studs, 1.10 for plates and sheathing.`;
+Be exact with quantities. Include waste factors: 1.15 for studs, 1.10 for plates and sheathing.
 
+At the END of the array, ALWAYS add at least one summary object like this:
+{
+  "type": "summary",
+  "estimated_total_sf": 2450,
+  "estimated_heated_sf": 2050,
+  "estimated_garage_sf": 400,
+  "estimated_porch_deck_sf": 150,
+  "note": "Heated living area 2050 sf + attached garage 400 sf. Porch excluded from heated area."
+}
+
+If you can distinguish them clearly, include separate summary objects for different floors or areas, e.g.:
+{ "type": "summary", "area": "Main floor", "estimated_sf": 1400, "note": "..." }
+{ "type": "summary", "area": "Second floor", "estimated_sf": 650, "note": "..." }
+`;
+  
 // ─── SPAN TABLE CALCULATOR ───────────────────────────────────────────────────
 // Based on IRC 2021 / Michigan Residential Code span tables
 const SPAN_DATA = {
