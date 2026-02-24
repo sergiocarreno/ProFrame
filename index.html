@@ -47,42 +47,133 @@ const load = ()=>{try{const r=localStorage.getItem(LS_KEY);return r?JSON.parse(r
 const MAT_CATS = ["Exterior Walls","Interior Walls","Floor System","Roof Framing",
   "Engineered Lumber","Headers","Finish Lumber","Stairs","Hardware & Fasteners","Other"];
 
+// ─── PRICE DATABASE ──────────────────────────────────────────────────────────
+// Source: Michigan lumber yards / Home Depot avg 2025-2026. Update in Settings.
+// Each entry: display name → {unit, price, tags:[keywords for fuzzy matching]}
 const DEFAULT_PRICES = {
-  "2x6x92-5/8 Stud":        {unit:"ea",  price:11.50},
-  "2x4x92-5/8 Stud":        {unit:"ea",  price:8.50},
-  "2x6x16 Plate":           {unit:"ea",  price:14.50},
-  "2x4x16 Plate":           {unit:"ea",  price:11.00},
-  "2x6x16 PT Sill Plate":   {unit:"ea",  price:18.00},
-  "7/16 OSB Wall Sheet":    {unit:"sheet",price:22.00},
-  "7/16 OSB Roof Sheet":    {unit:"sheet",price:22.00},
-  "3/4 T&G OSB Subfloor":   {unit:"sheet",price:44.00},
-  "Housewrap Roll":          {unit:"roll", price:68.00},
-  "2x4x8 Fire Block":       {unit:"ea",  price:6.50},
-  "2x4x16 Brace":           {unit:"ea",  price:11.00},
-  "2x8x16 Bridging":        {unit:"ea",  price:9.00},
-  "Roof Truss":              {unit:"ea",  price:185.00},
-  "2x10x16 Rafter":         {unit:"ea",  price:22.00},
-  "1.75x9.5 LVL 16ft":     {unit:"ea",  price:420.00},
-  "1.75x11.25 LVL 16ft":   {unit:"ea",  price:576.00},
-  "1.75x14 LVL 16ft":      {unit:"ea",  price:720.00},
-  "3.5x11.25 LVL 16ft":    {unit:"ea",  price:840.00},
-  "2x12x16 Header":         {unit:"ea",  price:34.00},
-  "2x10x16 Header":         {unit:"ea",  price:28.00},
-  "2x8x16 Header":          {unit:"ea",  price:20.00},
-  "1x8x16 Fascia":          {unit:"ea",  price:24.00},
-  "2x6x16 Sub-Fascia":      {unit:"ea",  price:14.50},
-  "Soffit Panel":            {unit:"sheet",price:32.00},
-  "1x6x16 Frieze Board":    {unit:"ea",  price:16.00},
-  "2x12x16 Stair Stringer": {unit:"ea",  price:52.00},
-  "2x10x16 Stair Tread":    {unit:"ea",  price:18.50},
-  "16d Framing Nails 30lb": {unit:"box", price:58.00},
-  "3in Structural Screws":  {unit:"box", price:28.00},
-  "Simpson H2.5A Strap":    {unit:"ea",  price:2.80},
-  "Simpson LUS210 Hanger":  {unit:"ea",  price:1.85},
-  "Simpson HD2A Hold-Down": {unit:"ea",  price:24.00},
-  "Anchor Bolt 1/2x10":     {unit:"ea",  price:2.20},
-  "PL400 Adhesive":          {unit:"tube",price:7.50},
+  // STUDS
+  "2x6x92-5/8 Stud":         {unit:"ea",   price:11.50, tags:["2x6","stud","92"]},
+  "2x4x92-5/8 Stud":         {unit:"ea",   price:8.50,  tags:["2x4","stud","92"]},
+  "2x6x104-5/8 Stud":        {unit:"ea",   price:13.00, tags:["2x6","stud","104","9ft"]},
+  "2x4x104-5/8 Stud":        {unit:"ea",   price:9.50,  tags:["2x4","stud","104","9ft"]},
+  "2x6x116-5/8 Stud":        {unit:"ea",   price:15.00, tags:["2x6","stud","116","10ft"]},
+  // PLATES (priced per 16ft board)
+  "2x6x16 Plate":             {unit:"ea",   price:14.50, tags:["2x6","plate","top plate","bottom plate","double plate"]},
+  "2x4x16 Plate":             {unit:"ea",   price:11.00, tags:["2x4","plate","top plate","bottom plate","double plate"]},
+  "2x6x16 PT Sill Plate":    {unit:"ea",   price:18.00, tags:["pt","pressure","sill","treated","2x6"]},
+  "2x4x16 PT Sill Plate":    {unit:"ea",   price:14.00, tags:["pt","pressure","sill","treated","2x4"]},
+  // DIMENSIONAL LUMBER (per 16ft board)
+  "2x4x16 Framing":           {unit:"ea",   price:11.00, tags:["2x4","blocking","brace","fire","outrigger"]},
+  "2x6x16 Framing":           {unit:"ea",   price:14.50, tags:["2x6","blocking","bearing","gable"]},
+  "2x8x16 Framing":           {unit:"ea",   price:18.00, tags:["2x8","bridging","blocking","ledger"]},
+  "2x10x16 Framing":          {unit:"ea",   price:24.00, tags:["2x10","floor joist","joist","rafter"]},
+  "2x12x16 Framing":          {unit:"ea",   price:32.00, tags:["2x12","stringer","joist","rafter"]},
+  "2x4x8 Short":              {unit:"ea",   price:6.50,  tags:["2x4","8ft","fire block","cripple","short"]},
+  // HEADERS (doubled, per piece)
+  "2x8x16 Header":            {unit:"ea",   price:20.00, tags:["header","2x8","opening"]},
+  "2x10x16 Header":           {unit:"ea",   price:28.00, tags:["header","2x10","opening"]},
+  "2x12x16 Header":           {unit:"ea",   price:34.00, tags:["header","2x12","opening"]},
+  // OSB / SHEATHING
+  "7/16 OSB Wall Sheathing":  {unit:"sheet",price:22.00, tags:["osb","wall sheathing","7/16","wall sheet","5/8 osb"]},
+  "7/16 OSB Roof Sheathing":  {unit:"sheet",price:22.00, tags:["osb","roof sheathing","7/16","roof sheet"]},
+  "3/4 T&G OSB Subfloor":    {unit:"sheet",price:44.00, tags:["subfloor","t&g","3/4","floor sheathing","osb floor"]},
+  "1/2 OSB Sheathing":        {unit:"sheet",price:20.00, tags:["1/2","osb","sheathing"]},
+  // HOUSEWRAP
+  "Housewrap Roll (1000 SF)": {unit:"roll", price:68.00, tags:["housewrap","weather barrier","tyvek","wrap"]},
+  // ENGINEERED LUMBER (per piece, priced by depth — adjust length multiplier in notes)
+  "1.75x9.5 LVL 16ft":       {unit:"ea",   price:420.00,tags:["lvl","1.75x9","9.5","9-1/2","lvl beam"]},
+  "1.75x11.25 LVL 16ft":     {unit:"ea",   price:576.00,tags:["lvl","1.75x11","11.25","11-1/4"]},
+  "1.75x14 LVL 16ft":        {unit:"ea",   price:720.00,tags:["lvl","1.75x14","14 lvl"]},
+  "1.75x16 LVL 16ft":        {unit:"ea",   price:900.00,tags:["lvl","1.75x16","16 lvl"]},
+  "3.5x9.5 LVL 16ft":        {unit:"ea",   price:780.00,tags:["lvl","3.5x9","double lvl","3-1/2x9"]},
+  "3.5x11.25 LVL 16ft":      {unit:"ea",   price:980.00,tags:["lvl","3.5x11","11.875","11-7/8","double 11"]},
+  "3.5x14 LVL 16ft":         {unit:"ea",   price:1200.00,tags:["lvl","3.5x14","double 14"]},
+  "3.5x16 LVL 16ft":         {unit:"ea",   price:1500.00,tags:["lvl","3.5x16","double 16"]},
+  "5.25x14 LVL 16ft":        {unit:"ea",   price:1800.00,tags:["lvl","5.25","5-1/4","triple","psl","para"]},
+  // TJI FLOOR JOISTS
+  "TJI 110 11-7/8 16ft":     {unit:"ea",   price:28.00, tags:["tji","tj","i-joist","110","11-7/8","11.875"]},
+  "TJI 210 11-7/8 16ft":     {unit:"ea",   price:32.00, tags:["tji","tj","i-joist","210"]},
+  "TJI 360 11-7/8 16ft":     {unit:"ea",   price:38.00, tags:["tji","tj","i-joist","360"]},
+  "LVL Rim Board 1-3/4x11-7/8 16ft":{unit:"ea",price:72.00,tags:["rim board","rim","lvl rim","1-3/4"]},
+  // ROOF
+  "Roof Truss":               {unit:"ea",   price:185.00,tags:["truss","roof truss"]},
+  "2x10x16 Rafter":           {unit:"ea",   price:24.00, tags:["rafter","2x10"]},
+  "2x12x16 Rafter":           {unit:"ea",   price:32.00, tags:["rafter","2x12"]},
+  "2x6x16 Ridge Board":       {unit:"ea",   price:14.50, tags:["ridge","ridge board"]},
+  "2x8x16 Ridge Board":       {unit:"ea",   price:18.00, tags:["ridge","ridge board","2x8"]},
+  "2x10x16 Ridge Board":      {unit:"ea",   price:24.00, tags:["ridge","ridge board","2x10"]},
+  "2x6x16 Collar Tie":        {unit:"ea",   price:14.50, tags:["collar tie","collar"]},
+  // FINISH LUMBER
+  "1x8x16 Fascia":            {unit:"ea",   price:24.00, tags:["fascia","1x8","1 x 8"]},
+  "1x10x16 Fascia":           {unit:"ea",   price:28.00, tags:["fascia","1x10","1 x 10"]},
+  "2x6x16 Sub-Fascia":        {unit:"ea",   price:14.50, tags:["sub-fascia","subfascia","sub fascia"]},
+  "2x8x16 Sub-Fascia":        {unit:"ea",   price:18.00, tags:["sub-fascia","2x8 fascia"]},
+  "1x4x16 Soffit Board":      {unit:"ea",   price:10.00, tags:["soffit","1x4 soffit"]},
+  "Soffit Panel 4x8":         {unit:"sheet",price:32.00, tags:["soffit","soffit panel","vinyl soffit"]},
+  "1x6x16 Frieze Board":      {unit:"ea",   price:16.00, tags:["frieze","1x6 frieze"]},
+  "1x4x16 Corner Board":      {unit:"ea",   price:10.00, tags:["corner board","1x4 corner"]},
+  "1x6x16 Barge/Rake Board":  {unit:"ea",   price:16.00, tags:["barge","rake","1x6 barge"]},
+  "1x8x16 Barge/Rake Board":  {unit:"ea",   price:20.00, tags:["barge","rake","1x8 barge"]},
+  // STAIRS
+  "2x12x16 Stair Stringer":   {unit:"ea",   price:52.00, tags:["stringer","stair stringer"]},
+  "2x10x16 Stair Tread":      {unit:"ea",   price:18.50, tags:["tread","stair tread"]},
+  "1x8x8 Stair Riser":        {unit:"ea",   price:9.50,  tags:["riser","stair riser"]},
+  // HARDWARE & FASTENERS
+  "16d Framing Nails 30lb":   {unit:"box",  price:58.00, tags:["nails","16d","framing nail"]},
+  "3in Structural Screws 250ct":{unit:"box",price:28.00, tags:["screws","structural screw","3in screw"]},
+  "Simpson H2.5A Hurricane Strap":{unit:"ea",price:2.80,tags:["hurricane strap","h2.5","h25","strap"]},
+  "Simpson LUS210 Joist Hanger":{unit:"ea", price:1.85, tags:["joist hanger","lus","lus210","hanger"]},
+  "Simpson HD2A Hold-Down":   {unit:"ea",   price:24.00, tags:["hold-down","hd2","holddown"]},
+  "Simpson Post Cap":         {unit:"ea",   price:18.00, tags:["post cap","post base","bc"]},
+  "Mudsill Anchor Bolt 1/2x10":{unit:"ea",  price:2.20, tags:["anchor bolt","mudsill bolt","1/2 bolt"]},
+  "PL400 Construction Adhesive":{unit:"tube",price:7.50,tags:["adhesive","glue","pl400","pl 400"]},
+  "LVL/Beam Connector Set":   {unit:"set",  price:42.00, tags:["beam connector","lvl connector"]},
+  "Misc Framing Ties":        {unit:"ea",   price:3.50,  tags:["framing tie","angle","misc tie"]},
 };
+
+// ─── SMART PRICE LOOKUP ───────────────────────────────────────────────────────
+// Scores every DB entry against description keywords, returns best match
+function smartLookup(desc, prices) {
+  if (!desc) return null;
+  const d = desc.toLowerCase();
+
+  // Extract key tokens from the description
+  const tokens = d.replace(/[^a-z0-9./\-x]/g,' ').split(/\s+/).filter(t=>t.length>1);
+
+  let bestKey = null, bestScore = 0;
+  Object.entries(prices).forEach(([key, data]) => {
+    const tags = (data.tags || []).concat(key.toLowerCase().split(/[\s\/\-]+/));
+    let score = 0;
+    tokens.forEach(tok => {
+      tags.forEach(tag => {
+        if (tag === tok) score += 3;
+        else if (tag.includes(tok) || tok.includes(tag)) score += 1;
+      });
+    });
+    if (score > bestScore) { bestScore = score; bestKey = key; }
+  });
+
+  return bestScore >= 2 ? {key: bestKey, price: prices[bestKey].price, unit: prices[bestKey].unit} : null;
+}
+
+// ─── LF → BOARD CONVERTER ────────────────────────────────────────────────────
+// Detects if a description is a board-length lumber and returns the board length
+function detectBoardLength(desc) {
+  const d = desc.toLowerCase();
+  // Explicit length in name
+  const m16 = d.match(/16\s*ft|x16\b/);
+  const m12 = d.match(/12\s*ft|x12\b/);
+  const m8  = d.match(/8\s*ft|x8\b/);
+  if (m16) return 16;
+  if (m12) return 12;
+  if (m8)  return 8;
+  // Plates and sills are always 16ft
+  if (d.includes("plate") || d.includes("sill") || d.includes("fascia") ||
+      d.includes("frieze") || d.includes("barge") || d.includes("rake") ||
+      d.includes("sub-fascia") || d.includes("subfascia") || d.includes("ridge") ||
+      d.includes("collar") || d.includes("blocking") || d.includes("bridging")) return 16;
+  return null;
+}
 
 // ─── GROK JSON PROMPT ────────────────────────────────────────────────────────
 const GROK_PROMPT = `You are analyzing residential framing plans. Extract ALL quantities and return ONLY a JSON array — no other text, no markdown, no explanation. Each item must have exactly these fields:
@@ -410,21 +501,283 @@ function MatEditor({items, onChange, prices}) {
   const [filter,setFilter] = useState("All");
   const [sortBy,setSortBy] = useState("category");
 
-  function updateItem(id,k,v) {
-    onChange(items.map(x=>x.id===id?{...x,[k]:v}:x));
+  function updateItem(id,fields) {
+    onChange(items.map(x=>x.id===id?{...x,...fields}:x));
   }
   function removeItem(id) {
     onChange(items.filter(x=>x.id!==id));
   }
   function addItem() {
-    onChange([...items,{id:uid(),description:"New Item",qty:"1",unit:"ea",price:"0",category:"Other",note:""}]);
+    onChange([...items,{id:uid(),description:"New Item",qty:"1",unit:"ea",price:"0",category:"Other",note:"",boardLen:null}]);
   }
 
-  // Auto-price lookup
-  function lookupPrice(desc) {
-    const key = Object.keys(prices).find(k=>desc.toLowerCase().includes(k.toLowerCase().split(" ").slice(0,2).join(" ").toLowerCase()));
-    return key ? prices[key].price : null;
+  // Convert LF → boards: 300 LF ÷ 16 = 19 boards
+  function convertLFtoBoards(item) {
+    const boardLen = detectBoardLength(item.description) || 16;
+    const boards = Math.ceil(num(item.qty) / boardLen);
+    const match  = smartLookup(item.description, prices);
+    updateItem(item.id, {
+      qty:   String(boards),
+      unit:  "ea",
+      price: match ? String(match.price) : item.price,
+      note:  (item.note ? item.note+" | " : "") + "Conv: "+item.qty+" LF ÷ "+boardLen+"ft = "+boards+" pcs"
+    });
   }
+
+  // Auto-apply all prices from DB for items with $0
+  function autoPrice() {
+    const updated = items.map(item => {
+      const match = smartLookup(item.description, prices);
+      if (match && num(item.price) === 0) return {...item, price: String(match.price)};
+      return item;
+    });
+    onChange(updated);
+  }
+
+  // Auto-convert ALL LF items to boards
+  function autoConvertAll() {
+    const updated = items.map(item => {
+      if (item.unit && item.unit.toLowerCase() === "lf") {
+        const boardLen = detectBoardLength(item.description) || 16;
+        const boards = Math.ceil(num(item.qty) / boardLen);
+        const match  = smartLookup(item.description, prices);
+        return {...item,
+          qty:  String(boards),
+          unit: "ea",
+          price: match && num(item.price)===0 ? String(match.price) : item.price,
+          note: (item.note ? item.note+" | " : "")+"Conv: "+item.qty+" LF ÷ "+boardLen+"ft = "+boards+" pcs"
+        };
+      }
+      return item;
+    });
+    onChange(updated);
+  }
+
+  const filtered = filter==="All" ? items : items.filter(i=>i.category===filter);
+  const sorted   = [...filtered].sort((a,b)=>{
+    if(sortBy==="category") return a.category.localeCompare(b.category)||a.description.localeCompare(b.description);
+    if(sortBy==="price") return num(b.qty)*num(b.price) - num(a.qty)*num(a.price);
+    return a.description.localeCompare(b.description);
+  });
+
+  const catTotals = {};
+  items.forEach(i=>{ catTotals[i.category]=(catTotals[i.category]||0)+num(i.qty)*num(i.price); });
+  const grandTotal = Object.values(catTotals).reduce((s,v)=>s+v,0);
+  const zeroPriceCount = items.filter(i=>num(i.price)===0).length;
+  const lfCount = items.filter(i=>i.unit&&i.unit.toLowerCase()==="lf").length;
+
+  const TH = {background:C.sur3,color:C.mut,fontSize:11,fontWeight:700,textTransform:"uppercase",
+    padding:"9px 10px",textAlign:"left",borderBottom:"1px solid "+C.brd,letterSpacing:.5};
+
+  return (
+    <div>
+      {/* Action banners for LF items and $0 prices */}
+      {lfCount > 0 && (
+        <div style={{background:C.acc+"18",border:"1px solid "+C.acc,borderRadius:10,padding:"12px 16px",
+          marginBottom:12,display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+          <div>
+            <b style={{color:C.acc}}>{lfCount} item{lfCount>1?"s":""} in Linear Feet (LF)</b>
+            <span style={{color:C.mut,fontSize:13,marginLeft:8}}>
+              — Convert to board count (÷ 16ft) so you can get a price per board from Home Depot
+            </span>
+          </div>
+          <Btn onClick={autoConvertAll} sz="sm">Convert All LF → Boards (÷16ft)</Btn>
+        </div>
+      )}
+      {zeroPriceCount > 0 && (
+        <div style={{background:C.blu+"18",border:"1px solid "+C.blu,borderRadius:10,padding:"12px 16px",
+          marginBottom:12,display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+          <div>
+            <b style={{color:C.blu}}>{zeroPriceCount} item{zeroPriceCount>1?"s":""} with $0.00 price</b>
+            <span style={{color:C.mut,fontSize:13,marginLeft:8}}>
+              — Click to auto-fill prices from our Michigan database (you can still edit after)
+            </span>
+          </div>
+          <Btn onClick={autoPrice} sz="sm" v="sec">Auto-Fill Prices from Database</Btn>
+        </div>
+      )}
+
+      {/* Summary bar */}
+      <div style={{background:C.sur2,border:"1px solid "+C.brd,borderRadius:10,padding:"14px 20px",
+        display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:12}}>
+        <div style={{display:"flex",gap:16,flexWrap:"wrap"}}>
+          {Object.entries(catTotals).filter(([,v])=>v>0).map(([cat,tot])=>(
+            <div key={cat} style={{fontSize:12}}>
+              <span style={{color:C.mut}}>{cat}: </span>
+              <span style={{fontWeight:700,color:C.txt,fontFamily:"monospace"}}>{$(tot)}</span>
+            </div>
+          ))}
+        </div>
+        <div style={{fontWeight:900,fontSize:20,color:C.acc,fontFamily:"monospace"}}>TOTAL: {$(grandTotal)}</div>
+      </div>
+
+      {/* Controls */}
+      <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap",alignItems:"center"}}>
+        <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+          {["All",...MAT_CATS].map(c=>{
+            const tot = catTotals[c];
+            return (
+              <button key={c} onClick={()=>setFilter(c)}
+                style={{background:filter===c?C.acc:C.sur2,color:filter===c?"#000":C.mut,
+                  border:"1px solid "+(filter===c?C.acc:C.brd),
+                  borderRadius:20,padding:"4px 11px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                {c==="All"?`All (${items.length})`:tot>0?`${c} (${$(tot)})`:c}
+              </button>
+            );
+          })}
+        </div>
+        <div style={{marginLeft:"auto",display:"flex",gap:6,alignItems:"center"}}>
+          <span style={{fontSize:11,color:C.mut}}>Sort:</span>
+          {[["category","Category"],["description","Name"],["price","$ High-Low"]].map(([v,l])=>(
+            <button key={v} onClick={()=>setSortBy(v)}
+              style={{background:sortBy===v?C.sur3:C.sur2,color:sortBy===v?C.acc:C.mut,
+                border:"1px solid "+C.brd,borderRadius:6,padding:"4px 10px",
+                fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+              {l}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Table */}
+      <div style={{overflowX:"auto",borderRadius:10,border:"1px solid "+C.brd}}>
+        <table style={{width:"100%",borderCollapse:"collapse",fontSize:13,minWidth:860}}>
+          <thead>
+            <tr>
+              <th style={{...TH,minWidth:200}}>Description</th>
+              <th style={{...TH,width:130}}>Category</th>
+              <th style={{...TH,width:65,textAlign:"right"}}>Qty</th>
+              <th style={{...TH,width:55}}>Unit</th>
+              <th style={{...TH,width:95,textAlign:"right"}}>Unit Price</th>
+              <th style={{...TH,width:100,textAlign:"right"}}>Line Total</th>
+              <th style={{...TH,width:150}}>Note</th>
+              <th style={{...TH,width:40}}></th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((item,i)=>{
+              const lineTotal = num(item.qty)*num(item.price);
+              const isLF  = item.unit && item.unit.toLowerCase()==="lf";
+              const isSF  = item.unit && item.unit.toLowerCase()==="sf";
+              const isZero = num(item.price) === 0;
+              const match = smartLookup(item.description, prices);
+              const hasSuggestion = match && Math.abs(match.price - num(item.price)) > 0.01;
+              const boardLen = isLF ? (detectBoardLength(item.description)||16) : null;
+
+              return (
+                <tr key={item.id} style={{borderBottom:"1px solid "+C.brd,
+                  background:isZero?(C.red+"0a"):i%2===0?C.sur:C.sur2}}>
+
+                  {/* Description */}
+                  <td style={{padding:"5px 8px"}}>
+                    <input value={item.description}
+                      onChange={e=>updateItem(item.id,{description:e.target.value})}
+                      style={{...IS({fontSize:12,padding:"4px 8px"}),background:"none",border:"none",width:"100%"}}/>
+                  </td>
+
+                  {/* Category */}
+                  <td style={{padding:"5px 6px"}}>
+                    <select value={item.category}
+                      onChange={e=>updateItem(item.id,{category:e.target.value})}
+                      style={{...IS({fontSize:11,padding:"4px 5px"}),background:"none",width:"100%"}}>
+                      {MAT_CATS.map(c=><option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </td>
+
+                  {/* Qty */}
+                  <td style={{padding:"5px 6px"}}>
+                    <input type="number" value={item.qty}
+                      onChange={e=>updateItem(item.id,{qty:e.target.value})}
+                      style={{...IS({fontSize:12,padding:"4px 6px",textAlign:"right"}),background:"none",border:"none"}}/>
+                  </td>
+
+                  {/* Unit — show convert button for LF */}
+                  <td style={{padding:"5px 6px"}}>
+                    {isLF ? (
+                      <div style={{display:"flex",flexDirection:"column",gap:2}}>
+                        <span style={{background:C.acc+"33",color:C.acc,borderRadius:4,padding:"2px 6px",fontSize:11,fontWeight:700,textAlign:"center"}}>LF</span>
+                        <button onClick={()=>convertLFtoBoards(item)}
+                          title={`Convert ${item.qty} LF ÷ ${boardLen}ft = ${Math.ceil(num(item.qty)/boardLen)} boards`}
+                          style={{background:C.acc,color:"#000",border:"none",borderRadius:4,padding:"2px 4px",fontSize:9,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>
+                          ÷{boardLen}ft→ea
+                        </button>
+                      </div>
+                    ) : (
+                      <input value={item.unit}
+                        onChange={e=>updateItem(item.id,{unit:e.target.value})}
+                        style={{...IS({fontSize:11,padding:"4px 6px"}),background:"none",border:"none"}}/>
+                    )}
+                  </td>
+
+                  {/* Unit Price */}
+                  <td style={{padding:"5px 6px",position:"relative"}}>
+                    <input type="number" value={item.price}
+                      onChange={e=>updateItem(item.id,{price:e.target.value})}
+                      style={{...IS({fontSize:12,padding:"4px 6px",textAlign:"right",
+                        color:isZero?C.red:C.txt,fontWeight:isZero?700:400}),
+                        background:"none",border:isZero?"1px solid "+C.red+"44":"none"}}/>
+                    {hasSuggestion && (
+                      <div title={"DB price: $"+match.price+" for "+match.key+" — click to apply"}
+                        onClick={()=>updateItem(item.id,{price:String(match.price)})}
+                        style={{fontSize:9,color:C.acc,cursor:"pointer",background:C.sur3,borderRadius:4,
+                          padding:"2px 5px",marginTop:1,textAlign:"center",border:"1px solid "+C.acc+"44"}}>
+                        Use DB: ${match.price} ↗
+                      </div>
+                    )}
+                  </td>
+
+                  {/* Line Total */}
+                  <td style={{padding:"5px 10px",textAlign:"right",fontFamily:"monospace",
+                    fontWeight:700,color:lineTotal===0?C.red:lineTotal>1000?C.acc:C.txt}}>
+                    {lineTotal===0 ? <span style={{color:C.red}}>$0.00 ⚠</span> : $(lineTotal)}
+                  </td>
+
+                  {/* Note */}
+                  <td style={{padding:"5px 6px"}}>
+                    <input value={item.note||""}
+                      onChange={e=>updateItem(item.id,{note:e.target.value})}
+                      placeholder="note..."
+                      style={{...IS({fontSize:10,padding:"3px 6px"}),background:"none",border:"none",color:C.mut}}/>
+                  </td>
+
+                  {/* Delete */}
+                  <td style={{padding:"5px 6px",textAlign:"center"}}>
+                    <button onClick={()=>removeItem(item.id)}
+                      style={{background:C.red+"33",border:"none",color:C.red,cursor:"pointer",
+                        borderRadius:4,width:22,height:22,fontSize:14,fontWeight:700,lineHeight:1}}>×</button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+          <tfoot>
+            <tr style={{background:C.sur2}}>
+              <td colSpan={8} style={{padding:"8px 10px"}}>
+                <Btn sz="sm" onClick={addItem}>+ Add Line Item</Btn>
+              </td>
+            </tr>
+            <tr style={{background:C.sur3}}>
+              <td colSpan={5} style={{padding:"11px 12px",fontWeight:900,fontSize:13,
+                textTransform:"uppercase",letterSpacing:.5,color:C.mut}}>
+                Grand Total — Materials
+              </td>
+              <td style={{padding:"11px 12px",textAlign:"right",fontFamily:"monospace",
+                fontWeight:900,fontSize:18,color:C.acc}}>{$(grandTotal)}</td>
+              <td colSpan={2}/>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+
+      {/* Price source note */}
+      <div style={{marginTop:10,fontSize:11,color:C.mut,lineHeight:1.8}}>
+        <b style={{color:C.txt}}>About prices:</b> Our built-in database uses typical Michigan lumber yard / Home Depot pricing (2025–2026).
+        Grok provides quantities only — <b>prices are never from Grok.</b> Always verify with your supplier before sending to client.
+        Update your local prices in <b>Settings → Prices</b>.
+      </div>
+    </div>
+  );
+}
 
   const filtered = filter==="All" ? items : items.filter(i=>i.category===filter);
   const sorted   = [...filtered].sort((a,b)=>{
@@ -831,7 +1184,8 @@ function EstimateEditor({clients, est, onSave, onCancel, prices, onToast}) {
           description: item.description||item.name||item.item||"",
           qty: String(item.qty||item.quantity||1),
           unit: item.unit||"ea",
-          price: String(item.price||item.unit_price||item.unitPrice||lookupPrice(item.description||"")||"0"),
+          price: String(item.price||item.unit_price||item.unitPrice||
+            smartLookup(item.description||"",prices)?.price||"0"),
           category: item.category||"Other",
           note: item.note||item.notes||item.location||""
         }));
@@ -845,11 +1199,6 @@ function EstimateEditor({clients, est, onSave, onCancel, prices, onToast}) {
     } else {
       setGrokMsg("Could not parse JSON. Make sure you copied the full Grok response. See prompt instructions.");
     }
-  }
-
-  function lookupPrice(desc) {
-    const key = Object.keys(prices).find(k=>desc.toLowerCase().includes(k.toLowerCase().split(" ").slice(0,2).join(" ")));
-    return key ? prices[key].price : 0;
   }
 
   function handleSave() {
