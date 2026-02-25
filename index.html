@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-<title>ProFrame Estimator v4</title>
+<title>Mavericks ProFrame Estimator v4.1 – Supplier Edition</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
 body{background:#0b0e13;font-family:'Segoe UI',system-ui,sans-serif;color:#dde3ef;min-height:100vh;}
@@ -39,7 +39,7 @@ const uid  = () => Math.random().toString(36).slice(2,9);
 const num  = v  => parseFloat(v)||0;
 const fmt  = n  => Number(n||0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
 const $    = n  => "$"+fmt(n);
-const LS_KEY = "proframe_v4";
+const LS_KEY = "mavericks proframe_v4_1_supplier";
 const save = d => {try{localStorage.setItem(LS_KEY,JSON.stringify(d));}catch(e){}};
 const load = ()=>{try{const r=localStorage.getItem(LS_KEY);return r?JSON.parse(r):null;}catch(e){return null;}};
 
@@ -130,7 +130,31 @@ const DEFAULT_PRICES = {
   "LVL/Beam Connector Set":   {unit:"set",  price:42.00, tags:["beam connector","lvl connector"]},
   "Misc Framing Ties":        {unit:"ea",   price:3.50,  tags:["framing tie","angle","misc tie"]},
 };
+  
+const MASTER_MATERIALS = [
+  {key:"2x6x92-5/8 Stud", unit:"ea", defaultPrice:11.50, tags:["2x6","stud","92"]},
+  {key:"2x4x92-5/8 Stud", unit:"ea", defaultPrice:8.50, tags:["2x4","stud","92"]},
+  {key:"2x6x104-5/8 Stud", unit:"ea", defaultPrice:13.00, tags:["2x6","stud","104","9ft"]},
+  {key:"2x4x104-5/8 Stud", unit:"ea", defaultPrice:9.50, tags:["2x4","stud","104","9ft"]},
+  {key:"2x6x116-5/8 Stud", unit:"ea", defaultPrice:15.00, tags:["2x6","stud","116","10ft"]},
+  {key:"2x6x16 Plate", unit:"ea", defaultPrice:14.50, tags:["2x6","plate"]},
+  {key:"2x4x16 Plate", unit:"ea", defaultPrice:11.00, tags:["2x4","plate"]},
+  {key:"2x6x16 PT Sill Plate", unit:"ea", defaultPrice:18.00, tags:["pt","sill","2x6"]},
+  {key:"2x4x16 PT Sill Plate", unit:"ea", defaultPrice:14.00, tags:["pt","sill","2x4"]},
+  {key:"7/16 OSB Wall Sheathing", unit:"sheet", defaultPrice:25.00, tags:["osb","wall","7/16"]},
+  {key:"7/16 OSB Roof Sheathing", unit:"sheet", defaultPrice:25.00, tags:["osb","roof","7/16"]},
+  {key:"3/4 T&G OSB Subfloor", unit:"sheet", defaultPrice:48.00, tags:["subfloor","t&g","3/4"]},
+  {key:"Housewrap Roll (1000 SF)", unit:"roll", defaultPrice:225.00, tags:["housewrap","tyvek"]},
+  {key:"1.75x9.5 LVL 16ft", unit:"ea", defaultPrice:420.00, tags:["lvl","1.75x9.5"]},
+  // Add as many as you want — this is just the starter
+];
 
+  const DEFAULT_SUPPLIERS = [
+  {id:uid(), name:"Home Depot", notes:"Ecorse MI store", prices:{}},
+  {id:uid(), name:"84 Lumber", notes:"Taylor MI", prices:{}},
+  {id:uid(), name:"Carter Lumber", notes:"Local yard", prices:{}},
+  {id:uid(), name:"Custom Supplier 1", notes:"", prices:{}},
+];
 // ─── SMART PRICE LOOKUP ───────────────────────────────────────────────────────
 // Scores every DB entry against description keywords, returns best match
 function smartLookup(desc, prices) {
@@ -383,7 +407,100 @@ function SpanCalc() {
     if (spanNum <= maxSpan) spanResult = {ok:true, msg:`✓ ${size} @ ${oc}" OC (${species}) spans up to ${maxSpan}' — your ${spanNum}' span is OK.`};
     else spanResult = {ok:false, msg:`✗ ${size} @ ${oc}" OC (${species}) max is ${maxSpan}' — your ${spanNum}' span EXCEEDS this. Use larger member.`};
   }
+function SuppliersTab({suppliers, setSuppliers, masterMaterials}) {
+  const [selectedSupplier, setSelected] = useState(null);
+  const [newName, setNewName] = useState("");
+  const fileRef = useRef();
 
+  function addSupplier() {
+    if(!newName.trim()) return;
+    setSuppliers(prev=>[...prev,{id:uid(),name:newName.trim(),notes:"",prices:{}}]);
+    setNewName("");
+  }
+
+  function updateSupplierPrice(supId, matKey, value) {
+    setSuppliers(prev=>prev.map(s=>{
+      if(s.id!==supId) return s;
+      return {...s, prices:{...s.prices, [matKey]:{price:num(value), unit:masterMaterials.find(m=>m.key===matKey)?.unit||"ea"}}};
+    }));
+  }
+
+  function importCSV(supId, e) {
+    const file = e.target.files[0];
+    if(!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      const text = ev.target.result;
+      const lines = text.split(/\r?\n/).filter(l=>l.trim());
+      setSuppliers(prev=>prev.map(s=>{
+        if(s.id!==supId) return s;
+        const newPrices = {...s.prices};
+        lines.forEach(line=>{
+          const [desc,unit,priceStr] = line.split(',').map(p=>p.trim().replace(/^"|"$/g,''));
+          if(!desc || !priceStr) return;
+          const price = num(priceStr);
+          if(!isNaN(price)) newPrices[desc] = {price, unit:unit||"ea"};
+        });
+        return {...s, prices:newPrices};
+      }));
+      alert(`Imported prices for ${lines.length} items.`);
+    };
+    reader.readAsText(file);
+  }
+
+  const selected = suppliers.find(s=>s.id===selectedSupplier);
+
+  return (
+    <div>
+      <h2 style={{fontWeight:900,fontSize:22,textTransform:"uppercase",letterSpacing:1,marginBottom:20}}>Suppliers & Prices</h2>
+      <Card>
+        <CardH>Add New Supplier</CardH>
+        <div style={{display:"flex",gap:12,marginBottom:16}}>
+          <Field value={newName} onChange={setNewName} placeholder="e.g. Al's Lumber Yard"/>
+          <Btn onClick={addSupplier}>Add Supplier</Btn>
+        </div>
+      </Card>
+
+      <div style={{display:"grid",gridTemplateColumns:"240px 1fr",gap:20,marginTop:20}}>
+        <Card>
+          <CardH>Your Suppliers</CardH>
+          {suppliers.map(s=>(
+            <div key={s.id} onClick={()=>setSelected(s.id)}
+              style={{padding:"10px 12px",background:selectedSupplier===s.id?C.acc+"22":C.sur2,borderRadius:8,marginBottom:8,cursor:"pointer"}}>
+              <div style={{fontWeight:700}}>{s.name}</div>
+              <div style={{fontSize:12,color:C.mut}}>{Object.keys(s.prices).length} prices set</div>
+            </div>
+          ))}
+        </Card>
+
+        {selected && (
+          <Card>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+              <CardH>{selected.name} Prices</CardH>
+              <div>
+                <input type="file" accept=".csv" ref={fileRef} style={{display:"none"}}
+                  onChange={e=>importCSV(selected.id, e)}/>
+                <Btn sz="sm" onClick={()=>fileRef.current.click()}>Import CSV</Btn>
+              </div>
+            </div>
+            <div style={{maxHeight:600,overflowY:"auto"}}>
+              {masterMaterials.map(mat=>(
+                <div key={mat.key} style={{display:"grid",gridTemplateColumns:"3fr 80px 120px",gap:12,marginBottom:8,alignItems:"center"}}>
+                  <div>{mat.key}</div>
+                  <div style={{fontSize:12,color:C.mut}}>{mat.unit}</div>
+                  <input type="number" value={selected.prices[mat.key]?.price ?? ""}
+                    onChange={e=>updateSupplierPrice(selected.id, mat.key, e.target.value)}
+                    placeholder="—" style={{...IS({padding:"6px 8px",fontSize:13})}}
+                  />
+                </div>
+              ))}
+            </div>
+          </Card>
+        )}
+      </div>
+    </div>
+  );
+}
   // Suggest minimum size for a given span
   let suggestion = null;
   if (spanNum > 0) {
