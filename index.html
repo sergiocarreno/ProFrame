@@ -2118,6 +2118,2090 @@ ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(
 </script>
 </body>
 </html>
+    document.getElementById('load-error').style.display = 'block';
+    document.getElementById('root').style.display = 'none';
+    var missing = [];
+    if (typeof React === 'undefined') missing.push('React');
+    if (typeof ReactDOM === 'undefined') missing.push('ReactDOM');
+    if (typeof Babel === 'undefined') missing.push('Babel');
+    document.getElementById('load-error-detail').textContent = 'Missing: ' + missing.join(', ') + '. CDN may be blocked or slow.';
+  }
+});
+window.onerror = function(msg, src, line, col) {
+  if (src && src.includes('babel')) {
+    document.getElementById('load-error').style.display = 'block';
+    document.getElementById('load-error-detail').textContent = 'Babel error: ' + msg + ' (line ' + line + ')';
+  }
+};
+</script>
+<script type="text/babel">
+const {useState,useEffect,useRef,useCallback} = React;
+
+// ─── THEME ───────────────────────────────────────────────────────────────────
+const C = {
+  bg:"#0b0e13", sur:"#13181f", sur2:"#1a2030", sur3:"#202840",
+  brd:"#263045", acc:"#f0a020", red:"#e04545", grn:"#1db86a",
+  blu:"#3a7bd5", txt:"#dde3ef", mut:"#5a6880"
+};
+
+// ─── UTILS ───────────────────────────────────────────────────────────────────
+const uid  = () => Math.random().toString(36).slice(2,9);
+const num  = v  => parseFloat(v)||0;
+const fmt  = n  => Number(n||0).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
+const $    = n  => "$"+fmt(n);
+const LS_KEY = "mavericks proframe_v4_1_supplier";
+const save = d => {try{localStorage.setItem(LS_KEY,JSON.stringify(d));}catch(e){}};
+const load = ()=>{try{const r=localStorage.getItem(LS_KEY);return r?JSON.parse(r):null;}catch(e){return null;}};
+
+// ─── MATERIAL CATEGORIES & DEFAULT PRICES ───────────────────────────────────
+const MAT_CATS = ["Exterior Walls","Interior Walls","Floor System","Roof Framing",
+  "Engineered Lumber","Headers","Finish Lumber","Stairs","Hardware & Fasteners","Other"];
+
+// ─── PRICE DATABASE ──────────────────────────────────────────────────────────
+// Source: Michigan lumber yards / Home Depot avg 2025-2026. Update in Settings.
+// Each entry: display name → {unit, price, tags:[keywords for fuzzy matching]}
+const DEFAULT_PRICES = {
+  // STUDS
+  "2x6x92-5/8 Stud":         {unit:"ea",   price:11.50, tags:["2x6","stud","92"]},
+  "2x4x92-5/8 Stud":         {unit:"ea",   price:8.50,  tags:["2x4","stud","92"]},
+  "2x6x104-5/8 Stud":        {unit:"ea",   price:13.00, tags:["2x6","stud","104","9ft"]},
+  "2x4x104-5/8 Stud":        {unit:"ea",   price:9.50,  tags:["2x4","stud","104","9ft"]},
+  "2x6x116-5/8 Stud":        {unit:"ea",   price:15.00, tags:["2x6","stud","116","10ft"]},
+  // PLATES (priced per 16ft board)
+  "2x6x16 Plate":             {unit:"ea",   price:14.50, tags:["2x6","plate","top plate","bottom plate","double plate"]},
+  "2x4x16 Plate":             {unit:"ea",   price:11.00, tags:["2x4","plate","top plate","bottom plate","double plate"]},
+  "2x6x16 PT Sill Plate":    {unit:"ea",   price:18.00, tags:["pt","pressure","sill","treated","2x6"]},
+  "2x4x16 PT Sill Plate":    {unit:"ea",   price:14.00, tags:["pt","pressure","sill","treated","2x4"]},
+  // DIMENSIONAL LUMBER (per 16ft board)
+  "2x4x16 Framing":           {unit:"ea",   price:11.00, tags:["2x4","blocking","brace","fire","outrigger"]},
+  "2x6x16 Framing":           {unit:"ea",   price:14.50, tags:["2x6","blocking","bearing","gable"]},
+  "2x8x16 Framing":           {unit:"ea",   price:18.00, tags:["2x8","bridging","blocking","ledger"]},
+  "2x10x16 Framing":          {unit:"ea",   price:24.00, tags:["2x10","floor joist","joist","rafter"]},
+  "2x12x16 Framing":          {unit:"ea",   price:32.00, tags:["2x12","stringer","joist","rafter"]},
+  "2x4x8 Short":              {unit:"ea",   price:6.50,  tags:["2x4","8ft","fire block","cripple","short"]},
+  // HEADERS (doubled, per piece)
+  "2x8x16 Header":            {unit:"ea",   price:20.00, tags:["header","2x8","opening"]},
+  "2x10x16 Header":           {unit:"ea",   price:28.00, tags:["header","2x10","opening"]},
+  "2x12x16 Header":           {unit:"ea",   price:34.00, tags:["header","2x12","opening"]},
+  // OSB / SHEATHING
+  "7/16 OSB Wall Sheathing":  {unit:"sheet",price:22.00, tags:["osb","wall sheathing","7/16","wall sheet","5/8 osb"]},
+  "7/16 OSB Roof Sheathing":  {unit:"sheet",price:22.00, tags:["osb","roof sheathing","7/16","roof sheet"]},
+  "3/4 T&G OSB Subfloor":    {unit:"sheet",price:44.00, tags:["subfloor","t&g","3/4","floor sheathing","osb floor"]},
+  "1/2 OSB Sheathing":        {unit:"sheet",price:20.00, tags:["1/2","osb","sheathing"]},
+  // HOUSEWRAP
+  "Housewrap Roll (1000 SF)": {unit:"roll", price:225.00, tags:["housewrap","weather barrier","tyvek","wrap","typar"]},
+  // ENGINEERED LUMBER (per piece, priced by depth — adjust length multiplier in notes)
+  "1.75x9.5 LVL 16ft":       {unit:"ea",   price:420.00,tags:["lvl","1.75x9","9.5","9-1/2","lvl beam"]},
+  "1.75x11.25 LVL 16ft":     {unit:"ea",   price:576.00,tags:["lvl","1.75x11","11.25","11-1/4"]},
+  "1.75x14 LVL 16ft":        {unit:"ea",   price:720.00,tags:["lvl","1.75x14","14 lvl"]},
+  "1.75x16 LVL 16ft":        {unit:"ea",   price:900.00,tags:["lvl","1.75x16","16 lvl"]},
+  "3.5x9.5 LVL 16ft":        {unit:"ea",   price:780.00,tags:["lvl","3.5x9","double lvl","3-1/2x9"]},
+  "3.5x11.25 LVL 16ft":      {unit:"ea",   price:980.00,tags:["lvl","3.5x11","11.875","11-7/8","double 11"]},
+  "3.5x14 LVL 16ft":         {unit:"ea",   price:1200.00,tags:["lvl","3.5x14","double 14"]},
+  "3.5x16 LVL 16ft":         {unit:"ea",   price:1500.00,tags:["lvl","3.5x16","double 16"]},
+  "5.25x14 LVL 16ft":        {unit:"ea",   price:1800.00,tags:["lvl","5.25","5-1/4","triple","psl","para"]},
+  // TJI FLOOR JOISTS
+  "TJI 110 11-7/8 16ft":     {unit:"ea",   price:28.00, tags:["tji","tj","i-joist","110","11-7/8","11.875"]},
+  "TJI 210 11-7/8 16ft":     {unit:"ea",   price:32.00, tags:["tji","tj","i-joist","210"]},
+  "TJI 360 11-7/8 16ft":     {unit:"ea",   price:38.00, tags:["tji","tj","i-joist","360"]},
+  "LVL Rim Board 1-3/4x11-7/8 16ft":{unit:"ea",price:72.00,tags:["rim board","rim","lvl rim","1-3/4"]},
+  // ROOF
+  "Roof Truss":               {unit:"ea",   price:185.00,tags:["truss","roof truss"]},
+  "2x10x16 Rafter":           {unit:"ea",   price:24.00, tags:["rafter","2x10"]},
+  "2x12x16 Rafter":           {unit:"ea",   price:32.00, tags:["rafter","2x12"]},
+  "2x6x16 Ridge Board":       {unit:"ea",   price:14.50, tags:["ridge","ridge board"]},
+  "2x8x16 Ridge Board":       {unit:"ea",   price:18.00, tags:["ridge","ridge board","2x8"]},
+  "2x10x16 Ridge Board":      {unit:"ea",   price:24.00, tags:["ridge","ridge board","2x10"]},
+  "2x6x16 Collar Tie":        {unit:"ea",   price:14.50, tags:["collar tie","collar"]},
+  // FINISH LUMBER
+  "1x8x16 Fascia":            {unit:"ea",   price:24.00, tags:["fascia","1x8","1 x 8"]},
+  "1x10x16 Fascia":           {unit:"ea",   price:28.00, tags:["fascia","1x10","1 x 10"]},
+  "2x6x16 Sub-Fascia":        {unit:"ea",   price:14.50, tags:["sub-fascia","subfascia","sub fascia"]},
+  "2x8x16 Sub-Fascia":        {unit:"ea",   price:18.00, tags:["sub-fascia","2x8 fascia"]},
+  "1x4x16 Soffit Board":      {unit:"ea",   price:10.00, tags:["soffit","1x4 soffit"]},
+  "Soffit Panel 4x8":         {unit:"sheet",price:32.00, tags:["soffit","soffit panel","vinyl soffit"]},
+  "1x6x16 Frieze Board":      {unit:"ea",   price:16.00, tags:["frieze","1x6 frieze"]},
+  "1x4x16 Corner Board":      {unit:"ea",   price:10.00, tags:["corner board","1x4 corner"]},
+  "1x6x16 Barge/Rake Board":  {unit:"ea",   price:16.00, tags:["barge","rake","1x6 barge"]},
+  "1x8x16 Barge/Rake Board":  {unit:"ea",   price:20.00, tags:["barge","rake","1x8 barge"]},
+  // STAIRS
+  "2x12x16 Stair Stringer":   {unit:"ea",   price:52.00, tags:["stringer","stair stringer"]},
+  "2x10x16 Stair Tread":      {unit:"ea",   price:18.50, tags:["tread","stair tread"]},
+  "1x8x8 Stair Riser":        {unit:"ea",   price:9.50,  tags:["riser","stair riser"]},
+  // HARDWARE & FASTENERS
+  "16d Framing Nails 30lb":   {unit:"box",  price:58.00, tags:["nails","16d","framing nail"]},
+  "3in Structural Screws 250ct":{unit:"box",price:28.00, tags:["screws","structural screw","3in screw"]},
+  "Simpson H2.5A Hurricane Strap":{unit:"ea",price:2.80,tags:["hurricane strap","h2.5","h25","strap"]},
+  "Simpson LUS210 Joist Hanger":{unit:"ea", price:1.85, tags:["joist hanger","lus","lus210","hanger"]},
+  "Simpson HD2A Hold-Down":   {unit:"ea",   price:24.00, tags:["hold-down","hd2","holddown"]},
+  "Simpson Post Cap":         {unit:"ea",   price:18.00, tags:["post cap","post base","bc"]},
+  "Mudsill Anchor Bolt 1/2x10":{unit:"ea",  price:2.20, tags:["anchor bolt","mudsill bolt","1/2 bolt"]},
+  "PL400 Construction Adhesive":{unit:"tube",price:7.50,tags:["adhesive","glue","pl400","pl 400"]},
+  "LVL/Beam Connector Set":   {unit:"set",  price:42.00, tags:["beam connector","lvl connector"]},
+  "Misc Framing Ties":        {unit:"ea",   price:3.50,  tags:["framing tie","angle","misc tie"]},
+};
+
+const MASTER_MATERIALS = [
+  {key:"2x6x92-5/8 Stud", unit:"ea", defaultPrice:11.50, tags:["2x6","stud","92"]},
+  {key:"2x4x92-5/8 Stud", unit:"ea", defaultPrice:8.50, tags:["2x4","stud","92"]},
+  {key:"2x6x104-5/8 Stud", unit:"ea", defaultPrice:13.00, tags:["2x6","stud","104","9ft"]},
+  {key:"2x4x104-5/8 Stud", unit:"ea", defaultPrice:9.50, tags:["2x4","stud","104","9ft"]},
+  {key:"2x6x116-5/8 Stud", unit:"ea", defaultPrice:15.00, tags:["2x6","stud","116","10ft"]},
+  {key:"2x6x16 Plate", unit:"ea", defaultPrice:14.50, tags:["2x6","plate"]},
+  {key:"2x4x16 Plate", unit:"ea", defaultPrice:11.00, tags:["2x4","plate"]},
+  {key:"2x6x16 PT Sill Plate", unit:"ea", defaultPrice:18.00, tags:["pt","sill","2x6"]},
+  {key:"2x4x16 PT Sill Plate", unit:"ea", defaultPrice:14.00, tags:["pt","sill","2x4"]},
+  {key:"7/16 OSB Wall Sheathing", unit:"sheet", defaultPrice:25.00, tags:["osb","wall","7/16"]},
+  {key:"7/16 OSB Roof Sheathing", unit:"sheet", defaultPrice:25.00, tags:["osb","roof","7/16"]},
+  {key:"3/4 T&G OSB Subfloor", unit:"sheet", defaultPrice:48.00, tags:["subfloor","t&g","3/4"]},
+  {key:"Housewrap Roll (1000 SF)", unit:"roll", defaultPrice:225.00, tags:["housewrap","tyvek"]},
+  {key:"1.75x9.5 LVL 16ft", unit:"ea", defaultPrice:420.00, tags:["lvl","1.75x9.5"]},
+  // Add as many as you want — this is just the starter
+];
+
+const DEFAULT_SUPPLIERS = [
+  {id:uid(), name:"Home Depot",      notes:"Ecorse MI store", prices:{}},
+  {id:uid(), name:"84 Lumber",       notes:"Taylor MI",       prices:{}},
+  {id:uid(), name:"Carter Lumber",   notes:"Local yard",      prices:{}},
+  {id:uid(), name:"Custom Supplier", notes:"",                prices:{}},
+];
+// ─── SMART PRICE LOOKUP ───────────────────────────────────────────────────────
+// Scores every DB entry against description keywords, returns best match
+function smartLookup(desc, prices) {
+  if (!desc) return null;
+  const d = desc.toLowerCase();
+
+  // Extract key tokens from the description
+  const tokens = d.replace(/[^a-z0-9.\/-x]/g,' ').split(/\s+/).filter(t=>t.length>1);
+
+  let bestKey = null, bestScore = 0;
+  Object.entries(prices).forEach(([key, data]) => {
+    const tags = (data.tags || []).concat(key.toLowerCase().split(/[\\s\\/\\-]+/));
+    let score = 0;
+    tokens.forEach(tok => {
+      tags.forEach(tag => {
+        if (tag === tok) score += 3;
+        else if (tag.includes(tok) || tok.includes(tag)) score += 1;
+      });
+    });
+    if (score > bestScore) { bestScore = score; bestKey = key; }
+  });
+
+  return bestScore >= 2 ? {key: bestKey, price: prices[bestKey].price, unit: prices[bestKey].unit} : null;
+}
+
+// ─── LF → BOARD CONVERTER ────────────────────────────────────────────────────
+// Detects if a description is a board-length lumber and returns the board length
+function detectBoardLength(desc) {
+  const d = desc.toLowerCase();
+  // Explicit length in name
+  const m16 = d.match(/16\\s*ft|x16\\b/);
+  const m12 = d.match(/12\\s*ft|x12\\b/);
+  const m8  = d.match(/8\\s*ft|x8\\b/);
+  if (m16) return 16;
+  if (m12) return 12;
+  if (m8)  return 8;
+  // Plates and sills are always 16ft
+  if (d.includes("plate") || d.includes("sill") || d.includes("fascia") ||
+      d.includes("frieze") || d.includes("barge") || d.includes("rake") ||
+      d.includes("sub-fascia") || d.includes("subfascia") || d.includes("ridge") ||
+      d.includes("collar") || d.includes("blocking") || d.includes("bridging")) return 16;
+  return null;
+}
+
+// ─── GROK JSON PROMPT ────────────────────────────────────────────────────────
+const GROK_PROMPT = `You are analyzing residential framing plans. Extract ALL quantities and return ONLY a JSON array — no other text, no markdown, no explanation.
+
+The array should contain material objects first, then one or more special "summary" objects at the very end.
+
+Each material item must have exactly these fields:
+{
+  "description": "2x6x92-5/8 Stud",
+  "qty": 280,
+  "unit": "ea",
+  "category": "Exterior Walls",
+  "note": "Floor 1 ext walls 16in OC"
+}
+
+Categories must be one of: "Exterior Walls", "Interior Walls", "Floor System", "Roof Framing", "Engineered Lumber", "Headers", "Finish Lumber", "Stairs", "Hardware & Fasteners"
+
+Extract every framing member including:
+- Exterior wall studs per floor (size, qty, spacing)
+- Interior wall studs per floor
+- PT sill plates, top plates, bottom plates
+- Wall sheathing (OSB sheets)
+- Housewrap
+- Floor joists or TJI (qty, size, spacing)
+- Subfloor OSB sheets
+- Bridging/blocking
+- Roof trusses OR rafters (qty, size, spacing)
+- Roof sheathing (OSB sheets)
+- Every LVL/PSL/Steel beam (exact size, exact length, qty, location)
+- Headers over every opening (size, qty, location)
+- Stair stringers, treads, risers per run
+- Fascia, sub-fascia, soffit, frieze board
+- Framing hardware (hurricane straps, joist hangers, hold-downs, anchor bolts)
+- Nails, screws, adhesive
+
+Use standard lumber descriptions like "2x6x92-5/8 Stud", "2x4x16 Plate", "1.75x9.5 LVL 20ft", "Roof Truss 30ft span"
+Be exact with quantities. Include waste factors: 1.15 for studs, 1.10 for plates and sheathing.
+
+At the END of the array, ALWAYS add at least one summary object like this:
+{
+  "type": "summary",
+  "estimated_total_sf": 2450,
+  "estimated_heated_sf": 2050,
+  "estimated_garage_sf": 400,
+  "estimated_porch_deck_sf": 150,
+  "note": "Heated living area 2050 sf + attached garage 400 sf. Porch excluded from heated area."
+}
+For housewrap and all sheathing, always give total square feet coverage (SF), never linear feet.
+For plates, fascia, sub-fascia, barge, frieze, and ridge boards, give total linear feet (LF).
+
+If you can distinguish them clearly, include separate summary objects for different floors or areas, e.g.:
+{ "type": "summary", "area": "Main floor", "estimated_sf": 1400, "note": "..." }
+{ "type": "summary", "area": "Second floor", "estimated_sf": 650, "note": "..." }
+`;
+
+
+// ─── SPAN TABLE CALCULATOR ───────────────────────────────────────────────────
+// Based on IRC 2021 / Michigan Residential Code span tables
+const SPAN_DATA = {
+  floor_joist: {
+    "2x8":  {"12":{"Douglas Fir #2":14.5,"SPF #2":13.5,"Hem-Fir #2":13.8},
+              "16":{"Douglas Fir #2":13.2,"SPF #2":12.3,"Hem-Fir #2":12.5},
+              "24":{"Douglas Fir #2":11.5,"SPF #2":10.7,"Hem-Fir #2":10.9}},
+    "2x10": {"12":{"Douglas Fir #2":18.4,"SPF #2":17.1,"Hem-Fir #2":17.5},
+              "16":{"Douglas Fir #2":16.7,"SPF #2":15.5,"Hem-Fir #2":15.9},
+              "24":{"Douglas Fir #2":14.5,"SPF #2":13.5,"Hem-Fir #2":13.8}},
+    "2x12": {"12":{"Douglas Fir #2":22.3,"SPF #2":20.7,"Hem-Fir #2":21.2},
+              "16":{"Douglas Fir #2":20.3,"SPF #2":18.9,"Hem-Fir #2":19.3},
+              "24":{"Douglas Fir #2":17.6,"SPF #2":16.4,"Hem-Fir #2":16.7}},
+  },
+  ceiling_joist: {
+    "2x6":  {"12":{"Douglas Fir #2":14.8,"SPF #2":13.7,"Hem-Fir #2":14.1},
+              "16":{"Douglas Fir #2":13.5,"SPF #2":12.5,"Hem-Fir #2":12.8},
+              "24":{"Douglas Fir #2":11.7,"SPF #2":10.9,"Hem-Fir #2":11.1}},
+    "2x8":  {"12":{"Douglas Fir #2":19.5,"SPF #2":18.1,"Hem-Fir #2":18.5},
+              "16":{"Douglas Fir #2":17.7,"SPF #2":16.5,"Hem-Fir #2":16.8},
+              "24":{"Douglas Fir #2":15.5,"SPF #2":14.4,"Hem-Fir #2":14.7}},
+    "2x10": {"12":{"Douglas Fir #2":24.2,"SPF #2":22.5,"Hem-Fir #2":23.0},
+              "16":{"Douglas Fir #2":22.0,"SPF #2":20.5,"Hem-Fir #2":20.9},
+              "24":{"Douglas Fir #2":19.2,"SPF #2":17.8,"Hem-Fir #2":18.2}},
+  },
+  rafter: {
+    "2x6":  {"12":{"Douglas Fir #2":13.6,"SPF #2":12.6,"Hem-Fir #2":12.9},
+              "16":{"Douglas Fir #2":12.4,"SPF #2":11.5,"Hem-Fir #2":11.7},
+              "24":{"Douglas Fir #2":10.8,"SPF #2":10.0,"Hem-Fir #2":10.2}},
+    "2x8":  {"12":{"Douglas Fir #2":17.9,"SPF #2":16.6,"Hem-Fir #2":17.0},
+              "16":{"Douglas Fir #2":16.3,"SPF #2":15.1,"Hem-Fir #2":15.4},
+              "24":{"Douglas Fir #2":14.2,"SPF #2":13.2,"Hem-Fir #2":13.4}},
+    "2x10": {"12":{"Douglas Fir #2":22.7,"SPF #2":21.1,"Hem-Fir #2":21.5},
+              "16":{"Douglas Fir #2":20.7,"SPF #2":19.2,"Hem-Fir #2":19.5},
+              "24":{"Douglas Fir #2":18.0,"SPF #2":16.7,"Hem-Fir #2":17.0}},
+    "2x12": {"12":{"Douglas Fir #2":27.6,"SPF #2":25.6,"Hem-Fir #2":26.1},
+              "16":{"Douglas Fir #2":25.1,"SPF #2":23.3,"Hem-Fir #2":23.7},
+              "24":{"Douglas Fir #2":21.9,"SPF #2":20.3,"Hem-Fir #2":20.7}},
+  }
+};
+
+const BEAM_DATA = [
+  {spans:[0,8],  load:"normal", rec:"3-1/2 x 9-1/2 LVL or (3) 2x10",  size:"1.75x9.5"},
+  {spans:[8,10], load:"normal", rec:"3-1/2 x 11-1/4 LVL or (3) 2x12", size:"1.75x11.25"},
+  {spans:[10,14],load:"normal", rec:"3-1/2 x 14 LVL",                   size:"1.75x14"},
+  {spans:[14,18],load:"normal", rec:"3-1/2 x 16 LVL (verify w/ eng)",   size:"1.75x16"},
+  {spans:[18,24],load:"normal", rec:"5-1/4 x 14 LVL or PSL (eng req)",  size:"5.25x14"},
+  {spans:[24,32],load:"normal", rec:"Engineer required — steel or PSL",  size:"steel"},
+  {spans:[0,8],  load:"heavy",  rec:"3-1/2 x 11-1/4 LVL or (3) 2x12", size:"1.75x11.25"},
+  {spans:[8,12], load:"heavy",  rec:"3-1/2 x 14 LVL",                   size:"1.75x14"},
+  {spans:[12,16],load:"heavy",  rec:"3-1/2 x 16 LVL (verify w/ eng)",   size:"1.75x16"},
+  {spans:[16,20],load:"heavy",  rec:"5-1/4 x 14 LVL or PSL (eng req)",  size:"5.25x14"},
+  {spans:[20,32],load:"heavy",  rec:"Engineer required — steel or PSL",  size:"steel"},
+];
+
+// ─── BASE COMPONENTS ─────────────────────────────────────────────────────────
+const IS = (extra={}) => ({
+  width:"100%", background:C.sur2, border:"1px solid "+C.brd,
+  borderRadius:8, padding:"9px 12px", color:C.txt, fontSize:14,
+  fontFamily:"inherit", ...extra
+});
+
+function Btn({v="pri",sz="md",onClick,children,style={},disabled=false,title=""}) {
+  const p = sz==="sm"?{padding:"5px 12px",fontSize:12}:sz==="lg"?{padding:"12px 28px",fontSize:15}:{padding:"9px 20px",fontSize:14};
+  const bg = v==="pri"?{background:C.acc,color:"#000"}
+    :v==="grn"?{background:C.grn,color:"#000"}
+    :v==="red"?{background:C.red,color:"#fff"}
+    :{background:C.sur3,color:C.txt,border:"1px solid "+C.brd};
+  return <button title={title} onClick={disabled?undefined:onClick} disabled={disabled}
+    style={{display:"inline-flex",alignItems:"center",gap:6,border:"none",cursor:disabled?"not-allowed":"pointer",
+      fontFamily:"inherit",fontWeight:700,borderRadius:8,opacity:disabled?.5:1,...p,...bg,...style}}>{children}</button>;
+}
+
+function Field({label,value,onChange,type="text",placeholder="",suffix,tip,err,readOnly=false,rows}) {
+  const input = rows
+    ? <textarea rows={rows} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} style={{...IS(),resize:"vertical"}}/>
+    : <div style={{position:"relative"}}>
+        <input type={type} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} readOnly={readOnly}
+          style={{...IS(),opacity:readOnly?.6:1,paddingRight:suffix?38:12}}/>
+        {suffix&&<span style={{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)",color:C.mut,fontSize:12,pointerEvents:"none"}}>{suffix}</span>}
+      </div>;
+  return (
+    <div style={{marginBottom:12}}>
+      {label&&<label style={{display:"block",fontSize:11,fontWeight:700,color:err?C.red:C.mut,textTransform:"uppercase",letterSpacing:.5,marginBottom:4}}>
+        {label}{tip&&<span style={{color:C.mut,fontWeight:400,marginLeft:6,textTransform:"none",fontSize:10}}>({tip})</span>}
+      </label>}
+      {input}
+      {err&&<div style={{fontSize:11,color:C.red,marginTop:3}}>{err}</div>}
+    </div>
+  );
+}
+
+function Pick({label,value,onChange,options}) {
+  return (
+    <div style={{marginBottom:12}}>
+      {label&&<label style={{display:"block",fontSize:11,fontWeight:700,color:C.mut,textTransform:"uppercase",letterSpacing:.5,marginBottom:4}}>{label}</label>}
+      <select value={value} onChange={e=>onChange(e.target.value)} style={IS()}>{options.map(o=><option key={o.v||o} value={o.v||o}>{o.l||o}</option>)}</select>
+    </div>
+  );
+}
+
+function Card({children,style={},accent=false}) {
+  return <div style={{background:C.sur,border:"1px solid "+(accent?C.acc:C.brd),borderRadius:12,padding:20,marginBottom:16,...style}}>{children}</div>;
+}
+
+function CardH({children}) {
+  return <div style={{fontWeight:800,fontSize:11,textTransform:"uppercase",letterSpacing:.6,color:C.acc,marginBottom:12}}>{children}</div>;
+}
+
+function Hr() { return <hr style={{border:"none",borderTop:"1px solid "+C.brd,margin:"14px 0"}}/>; }
+
+function BigNum({value,label,accent=false,sub}) {
+  return (
+    <div style={{background:C.sur2,border:"1px solid "+(accent?C.acc:C.brd),borderRadius:10,padding:16,textAlign:"center"}}>
+      <div style={{fontWeight:900,fontSize:22,color:accent?C.acc:C.txt,fontFamily:"monospace"}}>{value}</div>
+      <div style={{fontSize:10,color:C.mut,textTransform:"uppercase",letterSpacing:.5,marginTop:3}}>{label}</div>
+      {sub&&<div style={{fontSize:11,color:C.acc,marginTop:2}}>{sub}</div>}
+    </div>
+  );
+}
+
+function Toast({msg,ok}) {
+  return (
+    <div style={{position:"fixed",bottom:24,right:24,background:ok?C.grn+"22":C.red+"22",
+      border:"1px solid "+(ok?C.grn:C.red),borderRadius:10,padding:"12px 20px",fontSize:13,
+      color:C.txt,zIndex:9999,boxShadow:"0 8px 32px #0008"}}>
+      {ok?"✓":"✗"} {msg}
+    </div>
+  );
+}
+
+// ─── SPAN TABLE CALCULATOR ────────────────────────────────────────────────────
+function SpanCalc() {
+  const [mode,setMode] = useState("floor_joist");
+  const [size,setSize] = useState("2x10");
+  const [oc,setOC]     = useState("16");
+  const [species,setSpecies] = useState("Douglas Fir #2");
+  const [span,setSpan] = useState("");
+  const [beamSpan,setBeamSpan] = useState("");
+  const [beamLoad,setBeamLoad] = useState("normal");
+
+  const modeData = SPAN_DATA[mode]||{};
+  const sizeOpts = Object.keys(modeData);
+  const ocOpts   = Object.keys(modeData[size]||{});
+  const spOpts   = Object.keys((modeData[size]||{})[oc]||{});
+  const maxSpan  = ((modeData[size]||{})[oc]||{})[species] || null;
+
+  const spanNum = num(span);
+  let spanResult = null;
+  if (spanNum > 0 && maxSpan) {
+    if (spanNum <= maxSpan) spanResult = {ok:true,  msg:`✓ ${size} @ ${oc}" OC (${species}) spans up to ${maxSpan}' — your ${spanNum}' span is OK.`};
+    else                    spanResult = {ok:false, msg:`✗ ${size} @ ${oc}" OC (${species}) max is ${maxSpan}' — your ${spanNum}' span EXCEEDS this. Use larger member.`};
+  }
+
+  let suggestion = null;
+  if (spanNum > 0) {
+    const found = [];
+    Object.entries(modeData).forEach(([sz,ocMap])=>{
+      Object.entries(ocMap).forEach(([o,spMap])=>{
+        Object.entries(spMap).forEach(([sp,mx])=>{
+          if(mx>=spanNum) found.push({sz,oc:o,sp,mx});
+        });
+      });
+    });
+    found.sort((a,b)=>{
+      const si = ["2x6","2x8","2x10","2x12"];
+      return si.indexOf(a.sz)-si.indexOf(b.sz) || num(a.oc)-num(b.oc);
+    });
+    suggestion = found.slice(0,4);
+  }
+
+  let beamRec = null;
+  const bSpan = num(beamSpan);
+  if (bSpan > 0) {
+    const matches = BEAM_DATA.filter(b=>b.load===beamLoad && bSpan>b.spans[0] && bSpan<=b.spans[1]);
+    beamRec = matches[0]||null;
+  }
+
+  const modeLabels = {floor_joist:"Floor Joist",ceiling_joist:"Ceiling Joist",rafter:"Rafter"};
+
+  return (
+    <div>
+      <h2 style={{fontWeight:900,fontSize:22,textTransform:"uppercase",letterSpacing:1,marginBottom:6}}>Span Table Calculator</h2>
+      <p style={{color:C.mut,fontSize:13,marginBottom:20}}>Based on IRC 2021 / Michigan Residential Code. Always verify with your local inspector.</p>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+        <Card accent>
+          <CardH>Joist &amp; Rafter Span Checker</CardH>
+          <div style={{display:"flex",gap:6,marginBottom:14,background:C.sur3,borderRadius:8,padding:3}}>
+            {Object.entries(modeLabels).map(([k,l])=>(
+              <div key={k} onClick={()=>{setMode(k);setSize(Object.keys(SPAN_DATA[k])[1]||"2x8");setOC("16");}}
+                style={{flex:1,textAlign:"center",padding:"7px",borderRadius:6,cursor:"pointer",fontSize:12,fontWeight:700,
+                  background:mode===k?C.acc:"none",color:mode===k?"#000":C.mut,transition:"all .2s"}}>
+                {l}
+              </div>
+            ))}
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+            <Pick label="Member Size" value={size} onChange={setSize} options={sizeOpts}/>
+            <Pick label="Spacing OC"  value={oc}   onChange={setOC}   options={ocOpts.map(o=>({v:o,l:o+'" OC'}))}/>
+            <Pick label="Wood Species" value={species} onChange={setSpecies} options={spOpts}/>
+            <Field label="Your Span (ft)" value={span} onChange={setSpan} type="number" placeholder="e.g. 14" suffix="ft"/>
+          </div>
+          {maxSpan && !span && (
+            <div style={{background:C.sur2,borderRadius:8,padding:12,fontSize:13,color:C.mut}}>
+              Max span for <b style={{color:C.txt}}>{size} @ {oc}" OC ({species})</b>: <b style={{color:C.acc,fontSize:16}}>{maxSpan} ft</b>
+            </div>
+          )}
+          {spanResult && (
+            <div style={{background:spanResult.ok?C.grn+"22":C.red+"22",border:"1px solid "+(spanResult.ok?C.grn:C.red),
+              borderRadius:8,padding:12,fontSize:13,fontWeight:600,color:spanResult.ok?C.grn:C.red}}>
+              {spanResult.msg}
+            </div>
+          )}
+          {suggestion && suggestion.length > 0 && spanNum > 0 && (
+            <div style={{marginTop:12}}>
+              <div style={{fontSize:11,color:C.mut,textTransform:"uppercase",fontWeight:700,marginBottom:8}}>Min sizes for {spanNum}ft span:</div>
+              {suggestion.map((s,i)=>(
+                <div key={i} style={{display:"flex",justifyContent:"space-between",background:C.sur2,borderRadius:6,padding:"7px 12px",marginBottom:4,fontSize:13}}>
+                  <span><b style={{color:C.acc}}>{s.sz}</b> @ {s.oc}" OC — {s.sp}</span>
+                  <span style={{color:C.grn,fontFamily:"monospace"}}>max {s.mx}ft</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+        <Card>
+          <CardH>Beam / Header Quick-Size</CardH>
+          <p style={{fontSize:12,color:C.mut,marginBottom:14}}>Rule-of-thumb based on Michigan residential loads. For spans over 16ft get an engineer stamp.</p>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+            <Field label="Beam Span" value={beamSpan} onChange={setBeamSpan} type="number" placeholder="e.g. 18" suffix="ft"/>
+            <Pick label="Load Type" value={beamLoad} onChange={setBeamLoad}
+              options={[{v:"normal",l:"Normal (1 floor above)"},{v:"heavy",l:"Heavy (2 floors or roof)"}]}/>
+          </div>
+          {beamRec && (
+            <div style={{background:C.acc+"22",border:"1px solid "+C.acc,borderRadius:8,padding:14}}>
+              <div style={{fontSize:11,color:C.mut,marginBottom:4,textTransform:"uppercase",letterSpacing:.5}}>Recommended for {beamSpan}ft span, {beamLoad} load</div>
+              <div style={{fontWeight:900,fontSize:18,color:C.acc}}>{beamRec.rec}</div>
+              {beamRec.size==="steel" && <div style={{fontSize:12,color:C.red,marginTop:6}}>⚠ This span requires a structural engineer.</div>}
+            </div>
+          )}
+          {beamSpan && !beamRec && (
+            <div style={{background:C.red+"22",border:"1px solid "+C.red,borderRadius:8,padding:12,fontSize:13,color:C.red}}>
+              Span out of range. Contact a structural engineer.
+            </div>
+          )}
+          <Hr/>
+          <CardH>Common Span Reference</CardH>
+          <div style={{overflowX:"auto"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+              <thead>
+                <tr>{["Span","Normal Load","Heavy Load"].map(h=><th key={h} style={{background:C.sur3,color:C.mut,padding:"7px 10px",textAlign:"left",border:"1px solid "+C.brd}}>{h}</th>)}</tr>
+              </thead>
+              <tbody>
+                {[["Up to 8ft","(3)2x10 or 3.5x9.5 LVL","3.5x11.25 LVL"],
+                  ["8–10ft","3.5x11.25 LVL","3.5x14 LVL"],
+                  ["10–14ft","3.5x14 LVL","3.5x16 LVL"],
+                  ["14–18ft","3.5x16 LVL","5.25x14 LVL"],
+                  ["18–24ft","5.25x14 LVL / PSL","Engineer required"],
+                  ["24ft+","Engineer required","Engineer required"],
+                ].map((r,i)=>(
+                  <tr key={i} style={{background:i%2===0?C.sur:C.sur2}}>
+                    {r.map((c,j)=><td key={j} style={{padding:"7px 10px",border:"1px solid "+C.brd,color:j===0?C.acc:c.includes("Engineer")?C.red:C.txt,fontWeight:j===0?700:400}}>{c}</td>)}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+// ─── SUPPLIERS TAB ─────────────────────────────────────────────────────────────
+function SuppliersTab({suppliers, setSuppliers, masterMaterials}) {
+  const [selectedSupplier, setSelected] = useState(null);
+  const [newName, setNewName] = useState("");
+  const fileRef = useRef();
+
+  function addSupplier() {
+    if(!newName.trim()) return;
+    setSuppliers(prev=>[...prev,{id:uid(),name:newName.trim(),notes:"",prices:{}}]);
+    setNewName("");
+  }
+
+  function deleteSupplier(id) {
+    if(!window.confirm("Delete this supplier and all their prices?")) return;
+    setSuppliers(prev=>prev.filter(s=>s.id!==id));
+    if(selectedSupplier===id) setSelected(null);
+  }
+
+  function updateSupplierPrice(supId, matKey, value) {
+    setSuppliers(prev=>prev.map(s=>{
+      if(s.id!==supId) return s;
+      const updated = {...s.prices};
+      if(value==="" || value===null) {
+        delete updated[matKey];
+      } else {
+        const unit = masterMaterials.find(m=>m.key===matKey)?.unit||"ea";
+        updated[matKey] = {price:num(value), unit};
+      }
+      return {...s, prices:updated};
+    }));
+  }
+
+  function importCSV(supId, e) {
+    const file = e.target.files[0];
+    if(!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      const text = ev.target.result;
+      const lines = text.split(/\r?\n/).filter(l=>l.trim());
+      let count = 0;
+      setSuppliers(prev=>prev.map(s=>{
+        if(s.id!==supId) return s;
+        const newPrices = {...s.prices};
+        lines.forEach(line=>{
+          const [desc,unit,priceStr] = line.split(',').map(p=>p.trim().replace(/^"|"$/g,''));
+          if(!desc || !priceStr) return;
+          const price = parseFloat(priceStr);
+          if(!isNaN(price)) { newPrices[desc]={price,unit:unit||"ea"}; count++; }
+        });
+        return {...s, prices:newPrices};
+      }));
+      alert(`Imported ${count} prices for ${suppliers.find(s=>s.id===supId)?.name}.`);
+    };
+    reader.readAsText(file);
+  }
+
+  function exportCSV(sup) {
+    const rows = masterMaterials.map(m=>{
+      const p = sup.prices[m.key];
+      return `"${m.key}","${m.unit}","${p ? p.price : ""}"`;
+    });
+    const blob = new Blob([rows.join("\n")],{type:"text/csv"});
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = sup.name.replace(/\s+/g,"-")+"-prices.csv";
+    a.click();
+  }
+
+  const selected = suppliers.find(s=>s.id===selectedSupplier);
+  const priceCount = selected ? Object.keys(selected.prices).length : 0;
+  const totalItems = masterMaterials.length;
+
+  return (
+    <div>
+      <h2 style={{fontWeight:900,fontSize:22,textTransform:"uppercase",letterSpacing:1,marginBottom:6}}>Suppliers & Prices</h2>
+      <p style={{color:C.mut,fontSize:13,marginBottom:20}}>
+        Enter each supplier's prices here. When creating an estimate, select which supplier to use — the app automatically applies their prices to your material list.
+      </p>
+
+      <div style={{display:"grid",gridTemplateColumns:"280px 1fr",gap:20}}>
+        {/* Left: supplier list */}
+        <div>
+          <Card accent>
+            <CardH>Add New Supplier</CardH>
+            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+              <Field value={newName} onChange={setNewName} placeholder="e.g. Al's Lumber Yard"/>
+              <Btn onClick={addSupplier} sz="sm">Add</Btn>
+            </div>
+          </Card>
+          <Card>
+            <CardH>Your Suppliers</CardH>
+            {suppliers.length===0 && <p style={{color:C.mut,fontSize:13}}>No suppliers yet. Add one above.</p>}
+            {suppliers.map(s=>{
+              const pct = Math.round(Object.keys(s.prices).length/totalItems*100);
+              return (
+                <div key={s.id} onClick={()=>setSelected(s.id)}
+                  style={{padding:"11px 14px",background:selectedSupplier===s.id?C.acc+"22":C.sur2,
+                    borderRadius:8,marginBottom:8,cursor:"pointer",
+                    border:"1px solid "+(selectedSupplier===s.id?C.acc:C.brd)}}>
+                  <div style={{fontWeight:700,fontSize:14}}>{s.name}</div>
+                  <div style={{fontSize:11,color:C.mut,marginTop:3}}>
+                    {Object.keys(s.prices).length} / {totalItems} prices
+                    <span style={{marginLeft:8,background:pct>75?C.grn+"33":pct>40?C.acc+"33":C.red+"33",
+                      color:pct>75?C.grn:pct>40?C.acc:C.red,padding:"1px 6px",borderRadius:10,fontWeight:700}}>
+                      {pct}% complete
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </Card>
+        </div>
+
+        {/* Right: price editor */}
+        {selected ? (
+          <Card>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+              <div>
+                <CardH>{selected.name}</CardH>
+                <span style={{fontSize:12,color:C.mut}}>{priceCount} of {totalItems} materials priced</span>
+              </div>
+              <div style={{display:"flex",gap:8}}>
+                <input type="file" accept=".csv" ref={fileRef} style={{display:"none"}}
+                  onChange={e=>importCSV(selected.id, e)}/>
+                <Btn sz="sm" v="sec" onClick={()=>fileRef.current.click()} title="CSV format: Description,Unit,Price">Import CSV</Btn>
+                <Btn sz="sm" v="sec" onClick={()=>exportCSV(selected)}>Export CSV</Btn>
+                <Btn sz="sm" v="red" onClick={()=>deleteSupplier(selected.id)}>Delete</Btn>
+              </div>
+            </div>
+            <div style={{fontSize:11,color:C.mut,marginBottom:12,background:C.sur2,borderRadius:6,padding:"8px 12px"}}>
+              CSV format: <code>Description,Unit,Price</code> — one item per line. Description must match exactly.
+            </div>
+            <div style={{maxHeight:600,overflowY:"auto"}}>
+              <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+                <thead>
+                  <tr>
+                    <th style={{background:C.sur3,color:C.mut,padding:"8px 12px",textAlign:"left",borderBottom:"1px solid "+C.brd,fontSize:11,textTransform:"uppercase",letterSpacing:.5}}>Material</th>
+                    <th style={{background:C.sur3,color:C.mut,padding:"8px 12px",textAlign:"center",borderBottom:"1px solid "+C.brd,fontSize:11,textTransform:"uppercase",letterSpacing:.5,width:60}}>Unit</th>
+                    <th style={{background:C.sur3,color:C.mut,padding:"8px 12px",textAlign:"left",borderBottom:"1px solid "+C.brd,fontSize:11,textTransform:"uppercase",letterSpacing:.5,width:120}}>Default $</th>
+                    <th style={{background:C.sur3,color:C.acc,padding:"8px 12px",textAlign:"left",borderBottom:"1px solid "+C.brd,fontSize:11,textTransform:"uppercase",letterSpacing:.5,width:140}}>{selected.name} $</th>
+                    <th style={{background:C.sur3,color:C.mut,padding:"8px 12px",textAlign:"left",borderBottom:"1px solid "+C.brd,fontSize:11,textTransform:"uppercase",letterSpacing:.5,width:80}}>vs Default</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {masterMaterials.map((mat,i)=>{
+                    const supPrice = selected.prices[mat.key];
+                    const def = mat.defaultPrice;
+                    const diff = supPrice ? ((supPrice.price - def)/def*100).toFixed(0) : null;
+                    const diffColor = diff===null?C.mut:diff<0?C.grn:diff>0?C.red:C.mut;
+                    return (
+                      <tr key={mat.key} style={{borderBottom:"1px solid "+C.brd,background:i%2===0?C.sur:C.sur2}}>
+                        <td style={{padding:"7px 12px",fontWeight:500}}>{mat.key}</td>
+                        <td style={{padding:"7px 12px",textAlign:"center",color:C.mut,fontSize:11}}>{mat.unit}</td>
+                        <td style={{padding:"7px 12px",fontFamily:"monospace",color:C.mut}}>${def.toFixed(2)}</td>
+                        <td style={{padding:"5px 8px"}}>
+                          <input type="number" value={supPrice?.price ?? ""}
+                            onChange={e=>updateSupplierPrice(selected.id, mat.key, e.target.value)}
+                            placeholder="—"
+                            style={{...IS({padding:"5px 8px",fontSize:13}),
+                              border: supPrice ? "1px solid "+C.grn+"55" : "1px solid "+C.brd}}
+                          />
+                        </td>
+                        <td style={{padding:"7px 10px",fontFamily:"monospace",fontSize:12,
+                          fontWeight:700,color:diffColor}}>
+                          {diff!==null ? (diff>0?"+":"")+diff+"%" : "—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        ) : (
+          <Card style={{display:"flex",alignItems:"center",justifyContent:"center",minHeight:300}}>
+            <div style={{textAlign:"center",color:C.mut}}>
+              <div style={{fontSize:40,marginBottom:12}}>🏪</div>
+              <p style={{fontWeight:700,fontSize:15,color:C.txt,marginBottom:6}}>Select a supplier to edit their prices</p>
+              <p style={{fontSize:13}}>Or add a new supplier using the form on the left.</p>
+            </div>
+          </Card>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
+// ─── MATERIAL LIST EDITOR ─────────────────────────────────────────────────────
+function MatEditor({items, onChange, prices}) {
+  const [filter,setFilter] = useState("All");
+  const [sortBy,setSortBy] = useState("category");
+
+  function updateItem(id,fields) {
+    onChange(items.map(x=>x.id===id?{...x,...fields}:x));
+  }
+  function removeItem(id) {
+    onChange(items.filter(x=>x.id!==id));
+  }
+  function addItem() {
+    onChange([...items,{id:uid(),description:"New Item",qty:"1",unit:"ea",price:"0",category:"Other",note:"",boardLen:null}]);
+  }
+
+  // Convert LF → boards: 300 LF ÷ 16 = 19 boards
+  function convertLFtoBoards(item) {
+    const boardLen = detectBoardLength(item.description) || 16;
+    const boards = Math.ceil(num(item.qty) / boardLen);
+    const match  = smartLookup(item.description, prices);
+    updateItem(item.id, {
+      qty:   String(boards),
+      unit:  "ea",
+      price: match ? String(match.price) : item.price,
+      note:  (item.note ? item.note+" | " : "") + "Conv: "+item.qty+" LF ÷ "+boardLen+"ft = "+boards+" pcs"
+    });
+  }
+
+  // Auto-apply all prices from DB for items with $0
+  function autoPrice() {
+    const updated = items.map(item => {
+      const match = smartLookup(item.description, prices);
+      if (match && num(item.price) === 0) return {...item, price: String(match.price)};
+      return item;
+    });
+    onChange(updated);
+  }
+
+  // Auto-convert ALL LF items to boards
+  function autoConvertAll() {
+    const updated = items.map(item => {
+      if (item.unit && item.unit.toLowerCase() === "lf") {
+        const boardLen = detectBoardLength(item.description) || 16;
+        const boards = Math.ceil(num(item.qty) / boardLen);
+        const match  = smartLookup(item.description, prices);
+        return {...item,
+          qty:  String(boards),
+          unit: "ea",
+          price: match && num(item.price)===0 ? String(match.price) : item.price,
+          note: (item.note ? item.note+" | " : "")+"Conv: "+item.qty+" LF ÷ "+boardLen+"ft = "+boards+" pcs"
+        };
+      }
+      return item;
+    });
+    onChange(updated);
+  }
+
+  const filtered = filter==="All" ? items : items.filter(i=>i.category===filter);
+  const sorted   = [...filtered].sort((a,b)=>{
+    if(sortBy==="category") return a.category.localeCompare(b.category)||a.description.localeCompare(b.description);
+    if(sortBy==="price") return num(b.qty)*num(b.price) - num(a.qty)*num(a.price);
+    return a.description.localeCompare(b.description);
+  });
+
+  const catTotals = {};
+  items.forEach(i=>{ catTotals[i.category]=(catTotals[i.category]||0)+num(i.qty)*num(i.price); });
+  const grandTotal = Object.values(catTotals).reduce((s,v)=>s+v,0);
+  const zeroPriceCount = items.filter(i=>num(i.price)===0).length;
+  const lfCount = items.filter(i=>i.unit&&i.unit.toLowerCase()==="lf").length;
+
+  const TH = {background:C.sur3,color:C.mut,fontSize:11,fontWeight:700,textTransform:"uppercase",
+    padding:"9px 10px",textAlign:"left",borderBottom:"1px solid "+C.brd,letterSpacing:.5};
+
+  return (
+    <div>
+      {/* Action banners for LF items and $0 prices */}
+      {lfCount > 0 && (
+        <div style={{background:C.acc+"18",border:"1px solid "+C.acc,borderRadius:10,padding:"12px 16px",
+          marginBottom:12,display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+          <div>
+            <b style={{color:C.acc}}>{lfCount} item{lfCount>1?"s":""} in Linear Feet (LF)</b>
+            <span style={{color:C.mut,fontSize:13,marginLeft:8}}>
+              — Convert to board count (÷ 16ft) so you can get a price per board from Home Depot
+            </span>
+          </div>
+          <Btn onClick={autoConvertAll} sz="sm">Convert All LF → Boards (÷16ft)</Btn>
+        </div>
+      )}
+      {zeroPriceCount > 0 && (
+        <div style={{background:C.blu+"18",border:"1px solid "+C.blu,borderRadius:10,padding:"12px 16px",
+          marginBottom:12,display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+          <div>
+            <b style={{color:C.blu}}>{zeroPriceCount} item{zeroPriceCount>1?"s":""} with $0.00 price</b>
+            <span style={{color:C.mut,fontSize:13,marginLeft:8}}>
+              — Click to auto-fill prices from our Michigan database (you can still edit after)
+            </span>
+          </div>
+          <Btn onClick={autoPrice} sz="sm" v="sec">Auto-Fill Prices from Database</Btn>
+        </div>
+      )}
+
+      {/* Summary bar */}
+      <div style={{background:C.sur2,border:"1px solid "+C.brd,borderRadius:10,padding:"14px 20px",
+        display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:12}}>
+        <div style={{display:"flex",gap:16,flexWrap:"wrap"}}>
+          {Object.entries(catTotals).filter(([,v])=>v>0).map(([cat,tot])=>(
+            <div key={cat} style={{fontSize:12}}>
+              <span style={{color:C.mut}}>{cat}: </span>
+              <span style={{fontWeight:700,color:C.txt,fontFamily:"monospace"}}>{$(tot)}</span>
+            </div>
+          ))}
+        </div>
+        <div style={{fontWeight:900,fontSize:20,color:C.acc,fontFamily:"monospace"}}>TOTAL: {$(grandTotal)}</div>
+      </div>
+
+      {/* Controls */}
+      <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap",alignItems:"center"}}>
+        <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+          {["All",...MAT_CATS].map(c=>{
+            const tot = catTotals[c];
+            return (
+              <button key={c} onClick={()=>setFilter(c)}
+                style={{background:filter===c?C.acc:C.sur2,color:filter===c?"#000":C.mut,
+                  border:"1px solid "+(filter===c?C.acc:C.brd),
+                  borderRadius:20,padding:"4px 11px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                {c==="All"?`All (${items.length})`:tot>0?`${c} (${$(tot)})`:c}
+              </button>
+            );
+          })}
+        </div>
+        <div style={{marginLeft:"auto",display:"flex",gap:6,alignItems:"center"}}>
+          <span style={{fontSize:11,color:C.mut}}>Sort:</span>
+          {[["category","Category"],["description","Name"],["price","$ High-Low"]].map(([v,l])=>(
+            <button key={v} onClick={()=>setSortBy(v)}
+              style={{background:sortBy===v?C.sur3:C.sur2,color:sortBy===v?C.acc:C.mut,
+                border:"1px solid "+C.brd,borderRadius:6,padding:"4px 10px",
+                fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+              {l}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Table */}
+      <div style={{overflowX:"auto",borderRadius:10,border:"1px solid "+C.brd}}>
+        <table style={{width:"100%",borderCollapse:"collapse",fontSize:13,minWidth:860}}>
+          <thead>
+            <tr>
+              <th style={{...TH,minWidth:200}}>Description</th>
+              <th style={{...TH,width:130}}>Category</th>
+              <th style={{...TH,width:65,textAlign:"right"}}>Qty</th>
+              <th style={{...TH,width:55}}>Unit</th>
+              <th style={{...TH,width:95,textAlign:"right"}}>Unit Price</th>
+              <th style={{...TH,width:100,textAlign:"right"}}>Line Total</th>
+              <th style={{...TH,width:150}}>Note</th>
+              <th style={{...TH,width:40}}></th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((item,i)=>{
+              const lineTotal = num(item.qty)*num(item.price);
+              const isLF  = item.unit && item.unit.toLowerCase()==="lf";
+              const isSF  = item.unit && item.unit.toLowerCase()==="sf";
+              const isZero = num(item.price) === 0;
+              const match = smartLookup(item.description, prices);
+              const hasSuggestion = match && Math.abs(match.price - num(item.price)) > 0.01;
+              const boardLen = isLF ? (detectBoardLength(item.description)||16) : null;
+
+              return (
+                <tr key={item.id} style={{borderBottom:"1px solid "+C.brd,
+                  background:isZero?(C.red+"0a"):i%2===0?C.sur:C.sur2}}>
+
+                  {/* Description */}
+                  <td style={{padding:"5px 8px"}}>
+                    <input value={item.description}
+                      onChange={e=>updateItem(item.id,{description:e.target.value})}
+                      style={{...IS({fontSize:12,padding:"4px 8px"}),background:"none",border:"none",width:"100%"}}/>
+                  </td>
+
+                  {/* Category */}
+                  <td style={{padding:"5px 6px"}}>
+                    <select value={item.category}
+                      onChange={e=>updateItem(item.id,{category:e.target.value})}
+                      style={{...IS({fontSize:11,padding:"4px 5px"}),background:"none",width:"100%"}}>
+                      {MAT_CATS.map(c=><option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </td>
+
+                  {/* Qty */}
+                  <td style={{padding:"5px 6px"}}>
+                    <input type="number" value={item.qty}
+                      onChange={e=>updateItem(item.id,{qty:e.target.value})}
+                      style={{...IS({fontSize:12,padding:"4px 6px",textAlign:"right"}),background:"none",border:"none"}}/>
+                  </td>
+
+                  {/* Unit — show convert button for LF */}
+                  <td style={{padding:"5px 6px"}}>
+                    {isLF ? (
+                      <div style={{display:"flex",flexDirection:"column",gap:2}}>
+                        <span style={{background:C.acc+"33",color:C.acc,borderRadius:4,padding:"2px 6px",fontSize:11,fontWeight:700,textAlign:"center"}}>LF</span>
+                        <button onClick={()=>convertLFtoBoards(item)}
+                          title={`Convert ${item.qty} LF ÷ ${boardLen}ft = ${Math.ceil(num(item.qty)/boardLen)} boards`}
+                          style={{background:C.acc,color:"#000",border:"none",borderRadius:4,padding:"2px 4px",fontSize:9,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>
+                          ÷{boardLen}ft→ea
+                        </button>
+                      </div>
+                    ) : (
+                      <input value={item.unit}
+                        onChange={e=>updateItem(item.id,{unit:e.target.value})}
+                        style={{...IS({fontSize:11,padding:"4px 6px"}),background:"none",border:"none"}}/>
+                    )}
+                  </td>
+
+                  {/* Unit Price */}
+                  <td style={{padding:"5px 6px",position:"relative"}}>
+                    <input type="number" value={item.price}
+                      onChange={e=>updateItem(item.id,{price:e.target.value})}
+                      style={{...IS({fontSize:12,padding:"4px 6px",textAlign:"right",
+                        color:isZero?C.red:C.txt,fontWeight:isZero?700:400}),
+                        background:"none",border:isZero?"1px solid "+C.red+"44":"none"}}/>
+                    {hasSuggestion && (
+                      <div title={"DB price: $"+match.price+" for "+match.key+" — click to apply"}
+                        onClick={()=>updateItem(item.id,{price:String(match.price)})}
+                        style={{fontSize:9,color:C.acc,cursor:"pointer",background:C.sur3,borderRadius:4,
+                          padding:"2px 5px",marginTop:1,textAlign:"center",border:"1px solid "+C.acc+"44"}}>
+                        Use DB: ${match.price} ↗
+                      </div>
+                    )}
+                  </td>
+
+                  {/* Line Total */}
+                  <td style={{padding:"5px 10px",textAlign:"right",fontFamily:"monospace",
+                    fontWeight:700,color:lineTotal===0?C.red:lineTotal>1000?C.acc:C.txt}}>
+                    {lineTotal===0 ? <span style={{color:C.red}}>$0.00 ⚠</span> : $(lineTotal)}
+                  </td>
+
+                  {/* Note */}
+                  <td style={{padding:"5px 6px"}}>
+                    <input value={item.note||""}
+                      onChange={e=>updateItem(item.id,{note:e.target.value})}
+                      placeholder="note..."
+                      style={{...IS({fontSize:10,padding:"3px 6px"}),background:"none",border:"none",color:C.mut}}/>
+                  </td>
+
+                  {/* Delete */}
+                  <td style={{padding:"5px 6px",textAlign:"center"}}>
+                    <button onClick={()=>removeItem(item.id)}
+                      style={{background:C.red+"33",border:"none",color:C.red,cursor:"pointer",
+                        borderRadius:4,width:22,height:22,fontSize:14,fontWeight:700,lineHeight:1}}>×</button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+          <tfoot>
+            <tr style={{background:C.sur2}}>
+              <td colSpan={8} style={{padding:"8px 10px"}}>
+                <Btn sz="sm" onClick={addItem}>+ Add Line Item</Btn>
+              </td>
+            </tr>
+            <tr style={{background:C.sur3}}>
+              <td colSpan={5} style={{padding:"11px 12px",fontWeight:900,fontSize:13,
+                textTransform:"uppercase",letterSpacing:.5,color:C.mut}}>
+                Grand Total — Materials
+              </td>
+              <td style={{padding:"11px 12px",textAlign:"right",fontFamily:"monospace",
+                fontWeight:900,fontSize:18,color:C.acc}}>{$(grandTotal)}</td>
+              <td colSpan={2}/>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+
+      {/* Price source note */}
+      <div style={{marginTop:10,fontSize:11,color:C.mut,lineHeight:1.8}}>
+        <b style={{color:C.txt}}>About prices:</b> Our built-in database uses typical Michigan lumber yard / Home Depot pricing (2025–2026).
+        Grok provides quantities only — <b>prices are never from Grok.</b> Always verify with your supplier before sending to client.
+        Update your local prices in <b>Settings → Prices</b>.
+      </div>
+    </div>
+  );
+}
+
+
+// ─── PRINT DOCUMENT ───────────────────────────────────────────────────────────
+function PrintDoc({est,co}) {
+  const matTotal = est.items.reduce((s,i)=>s+num(i.qty)*num(i.price),0);
+  const laborTotal = num(est.totalSF)*num(est.laborRate);
+  const base = est.includesMat ? matTotal+laborTotal : laborTotal;
+  const profit = num(est.profitPct)>0 ? base*num(est.profitPct)/100 : 0;
+  const grandTotal = base+profit;
+  const sfRate = num(est.totalSF)>0 ? grandTotal/num(est.totalSF) : 0;
+
+  const catGroups = {};
+  est.items.forEach(i=>{
+    if(!catGroups[i.category]) catGroups[i.category]=[];
+    catGroups[i.category].push(i);
+  });
+
+  const W  = {background:"#fff",color:"#111",padding:"40px 48px",maxWidth:860,margin:"0 auto",fontFamily:"'Segoe UI',system-ui,sans-serif",lineHeight:1.6};
+  const TH = {background:"#f2f2f2",padding:"7px 10px",textAlign:"left",fontWeight:700,border:"1px solid #ddd",fontSize:12};
+  const TD = {padding:"6px 10px",border:"1px solid #ddd",fontSize:12};
+  const TDR= {...TD,textAlign:"right"};
+  const SH = {fontWeight:800,fontSize:12,textTransform:"uppercase",letterSpacing:.5,color:"#1a1a2e",borderBottom:"2px solid #1a1a2e",paddingBottom:3,marginBottom:8,marginTop:20};
+  const DR = {background:"#1a1a2e",color:"#fff"};
+
+  const depAmt   = grandTotal*num(est.depPct)/100;
+  const withAmt  = grandTotal*num(est.withPct)/100;
+  const midAmt   = grandTotal - depAmt - withAmt;
+  const midPct   = 100 - num(est.depPct) - num(est.withPct);
+
+  return (
+    <div style={W}>
+      {/* Header */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:24}}>
+        <div>
+          <div style={{fontWeight:900,fontSize:26,letterSpacing:2,color:"#1a1a2e",textTransform:"uppercase"}}>{co.name||"Your Company"}</div>
+          <div style={{fontSize:11,color:"#666",marginTop:3,lineHeight:1.8}}>
+            {co.address && <div>{co.address}</div>}
+            {co.phone   && <div>{co.phone}{co.email?" · "+co.email:""}</div>}
+            {co.license && <div>License # {co.license}</div>}
+          </div>
+        </div>
+        <div style={{textAlign:"right"}}>
+          <div style={{fontWeight:900,fontSize:16,color:"#1a1a2e"}}>FRAMING ESTIMATE</div>
+          <div style={{fontWeight:700,fontSize:13}}>#{est.number}</div>
+          <div style={{fontSize:12,color:"#666"}}>{est.date}</div>
+          <div style={{marginTop:6,display:"inline-block",background:"#1a1a2e",color:"#fff",padding:"3px 12px",borderRadius:4,fontSize:11,fontWeight:700}}>
+            {est.includesMat?"MATERIAL + LABOR":"LABOR ONLY"}
+          </div>
+        </div>
+      </div>
+
+      {/* Client + Project Info */}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:16}}>
+        <div style={{background:"#f8f8f8",borderRadius:6,padding:14}}>
+          <div style={{fontSize:10,fontWeight:700,color:"#999",textTransform:"uppercase",marginBottom:4}}>Prepared For</div>
+          <div style={{fontWeight:700,fontSize:15}}>{est.clientName||"—"}</div>
+          <div style={{fontSize:12,color:"#666"}}>{est.projectAddress||""}</div>
+          {est.clientPhone&&<div style={{fontSize:12,color:"#666"}}>{est.clientPhone}</div>}
+        </div>
+        <div style={{background:"#f8f8f8",borderRadius:6,padding:14,fontSize:12}}>
+          <table style={{width:"100%",borderCollapse:"collapse"}}>
+            <tbody>
+              {[["Total SF",num(est.totalSF).toLocaleString()+" SF"],
+                ["Labor Rate","$"+num(est.laborRate).toFixed(2)+"/SF"],
+                ["Profit Margin",num(est.profitPct)+"%"],
+                ["Effective Total/SF","$"+sfRate.toFixed(2)+"/SF"]].map(([k,v],i)=>(
+                <tr key={i}><td style={{color:"#888",padding:"2px 0 2px 0",paddingRight:12}}>{k}:</td><td style={{fontWeight:700}}>{v}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Scope */}
+      {est.scope && <>
+        <div style={SH}>Scope of Work</div>
+        <p style={{fontSize:12,marginBottom:8,lineHeight:1.7}}>{est.scope}</p>
+      </>}
+
+      {/* Material Breakdown */}
+      {est.includesMat && Object.keys(catGroups).length > 0 && (
+        <>
+          {Object.entries(catGroups).map(([cat,rows])=>{
+            const catTotal = rows.reduce((s,r)=>s+num(r.qty)*num(r.price),0);
+            return (
+              <div key={cat}>
+                <div style={SH}>{cat}</div>
+                <table style={{width:"100%",borderCollapse:"collapse",marginBottom:4}}>
+                  <thead>
+                    <tr>
+                      <th style={TH}>Description</th>
+                      <th style={{...TH,width:55,textAlign:"center"}}>Qty</th>
+                      <th style={{...TH,width:60}}>Unit</th>
+                      <th style={{...TH,width:85,textAlign:"right"}}>Unit $</th>
+                      <th style={{...TH,width:95,textAlign:"right"}}>Total</th>
+                      <th style={{...TH,width:130}}>Note</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((r,i)=>(
+                      <tr key={r.id}>
+                        <td style={TD}>{r.description}</td>
+                        <td style={{...TD,textAlign:"center"}}>{r.qty}</td>
+                        <td style={{...TD,color:"#888",fontSize:11}}>{r.unit}</td>
+                        <td style={TDR}>${num(r.price).toFixed(2)}</td>
+                        <td style={TDR}><b>${fmt(num(r.qty)*num(r.price))}</b></td>
+                        <td style={{...TD,color:"#888",fontSize:11}}>{r.note||""}</td>
+                      </tr>
+                    ))}
+                    <tr style={{background:"#f5f5f5"}}>
+                      <td colSpan={4} style={{...TD,fontWeight:700}}>Subtotal — {cat}</td>
+                      <td style={{...TDR,fontWeight:700}}>${fmt(catTotal)}</td>
+                      <td/>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            );
+          })}
+          <table style={{width:"100%",borderCollapse:"collapse",marginBottom:8}}>
+            <tbody>
+              <tr style={DR}>
+                <td style={{...TD,color:"#fff",fontWeight:900}} colSpan={4}>TOTAL MATERIALS</td>
+                <td style={{...TDR,color:"#e8a020",fontWeight:900}}>${fmt(matTotal)}</td>
+                <td style={{...TD,color:"#fff",fontSize:11}}>
+                  ${num(est.totalSF)>0?(matTotal/num(est.totalSF)).toFixed(2):"—"}/SF
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </>
+      )}
+
+      {/* Labor */}
+      <div style={SH}>Labor</div>
+      <table style={{width:"100%",borderCollapse:"collapse",marginBottom:8}}>
+        <tbody>
+          <tr>
+            <td style={TD}>Structural framing labor — {num(est.totalSF).toLocaleString()} SF @ ${num(est.laborRate).toFixed(2)}/SF</td>
+            <td style={{...TDR,width:130}}>${fmt(laborTotal)}</td>
+            <td style={{...TD,width:130,color:"#888",fontSize:11}}>${num(est.totalSF)>0?(laborTotal/num(est.totalSF)).toFixed(2):0}/SF</td>
+          </tr>
+          {num(est.profitPct)>0 && (
+            <tr>
+              <td style={TD}>Overhead & Profit ({est.profitPct}%)</td>
+              <td style={TDR}>${fmt(profit)}</td>
+              <td/>
+            </tr>
+          )}
+        </tbody>
+      </table>
+
+      {/* Grand Total */}
+      <table style={{width:"100%",borderCollapse:"collapse",margin:"4px 0 16px"}}>
+        <tbody>
+          <tr style={{background:"#0a1628"}}>
+            <td style={{...TD,color:"#fff",fontWeight:900,fontSize:16}}>ESTIMATE TOTAL</td>
+            <td style={{...TDR,color:"#e8a020",fontWeight:900,fontSize:16}}>${fmt(grandTotal)}</td>
+            <td style={{...TD,color:"#aaa",fontSize:12}}>${sfRate.toFixed(2)}/SF effective rate</td>
+          </tr>
+        </tbody>
+      </table>
+
+      {/* Labor Benchmark */}
+      <div style={{background:"#f0f7ff",border:"1px solid #3a7bd5",borderRadius:6,padding:12,marginBottom:16,fontSize:12}}>
+        <b style={{color:"#1a3a6e"}}>Labor Rate Context (Michigan 2026):</b> Typical residential framing runs $10–$16/SF for my-crew, $14–$20/SF subcontractor.
+        Your rate of ${num(est.laborRate).toFixed(2)}/SF is {num(est.laborRate)<10?"below market — consider raising":num(est.laborRate)>20?"above market — verify scope":num(est.laborRate)<14?"competitive":"in line with market"}.
+      </div>
+
+      {/* Payment Schedule */}
+      <div style={SH}>Payment Schedule</div>
+      <table style={{width:"100%",borderCollapse:"collapse"}}>
+        <thead><tr>
+          <th style={TH}>Milestone</th>
+          <th style={{...TH,width:55,textAlign:"right"}}>%</th>
+          <th style={{...TH,width:110,textAlign:"right"}}>Amount</th>
+        </tr></thead>
+        <tbody>
+          {[
+            {name:"Deposit — Due at contract signing",             pct:num(est.depPct),  amt:depAmt},
+            {name:"Progress — Work in place per approved schedule", pct:midPct,           amt:midAmt},
+            {name:"Withholding — Released after final inspection",  pct:num(est.withPct), amt:withAmt},
+          ].map((r,i)=>(
+            <tr key={i} style={{borderBottom:"1px solid #eee"}}>
+              <td style={TD}>{r.name}</td>
+              <td style={TDR}>{r.pct.toFixed(1)}%</td>
+              <td style={TDR}><b>${fmt(r.amt)}</b></td>
+            </tr>
+          ))}
+          <tr style={DR}>
+            <td style={{...TD,color:"#fff",fontWeight:700}}>Total</td>
+            <td style={{...TDR,color:"#fff",fontWeight:700}}>100%</td>
+            <td style={{...TDR,color:"#fff",fontWeight:700}}>${fmt(grandTotal)}</td>
+          </tr>
+        </tbody>
+      </table>
+
+      {/* Terms */}
+      {est.terms && <>
+        <div style={SH}>Terms & Conditions</div>
+        <p style={{fontSize:11,color:"#555",lineHeight:1.7}}>{est.terms}</p>
+      </>}
+
+      {/* Signatures */}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:48,marginTop:36}}>
+        {["Contractor Authorization","Client Acceptance"].map(l=>(
+          <div key={l}>
+            <div style={{fontWeight:700,fontSize:12,marginBottom:28}}>{l}</div>
+            <div style={{borderTop:"1px solid #333",paddingTop:4,fontSize:11,color:"#888"}}>Signature / Date</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── NEW ESTIMATE FLOW ────────────────────────────────────────────────────────
+const NEW_EST = () => ({
+  id: uid(),
+  number: "EST-"+Date.now().toString().slice(-6),
+  date: new Date().toISOString().split("T")[0],
+  clientId:"", clientName:"", clientPhone:"", projectAddress:"",
+  totalSF:"",
+  laborRate:"12",
+  includesMat:true,
+  profitPct:"20",
+  depPct:"10", withPct:"10",
+  scope:"Supply all labor and materials for complete structural framing of new residential construction per approved plans and Michigan building code.",
+  terms:"All work performed per 2021 Michigan Residential Code and approved plans. Owner responsible for permits. Changes require written change order. Retainage released within 5 business days of passed framing inspection.",
+  items:[],
+  status:"pending",
+  createdAt:Date.now()
+});
+
+// ─── RESOLVE ACTIVE PRICES ────────────────────────────────────────────────────
+// Returns a prices-shaped object {desc: {price, unit, tags}} for the chosen source.
+// "legacy"  → DEFAULT_PRICES (the built-in DB)
+// supplierId → that supplier's prices, falling back to legacy for missing items
+// "lowest"  → cheapest price across all suppliers + legacy for each key
+function resolveActivePrices(priceSource, legacyPrices, suppliers) {
+  if (!priceSource || priceSource === "legacy") return legacyPrices;
+
+  if (priceSource === "lowest") {
+    // Start with legacy, then replace any key where a supplier is cheaper
+    const result = {...legacyPrices};
+    Object.keys(legacyPrices).forEach(key => {
+      let lowest = legacyPrices[key].price;
+      suppliers.forEach(sup => {
+        const sp = sup.prices[key];
+        if (sp && num(sp.price) > 0 && num(sp.price) < lowest) {
+          lowest = num(sp.price);
+        }
+      });
+      result[key] = {...legacyPrices[key], price: lowest};
+    });
+    return result;
+  }
+
+  // Specific supplier selected
+  const sup = suppliers.find(s => s.id === priceSource);
+  if (!sup) return legacyPrices;
+
+  // Merge: supplier price wins, fall back to legacy for items not yet priced
+  const result = {...legacyPrices};
+  Object.entries(sup.prices).forEach(([key, val]) => {
+    if (result[key]) {
+      result[key] = {...result[key], price: val.price};
+    } else {
+      result[key] = {price: val.price, unit: val.unit, tags: []};
+    }
+  });
+  return result;
+}
+
+function EstimateEditor({clients, est, onSave, onCancel, prices, suppliers, onToast}) {
+  const [e,setE]           = useState({...est});
+  const [grokText,setGrok] = useState("");
+  const [grokMsg,setGrokMsg]= useState("");
+  const [tab,setTab]       = useState("info"); // info | materials | pricing | preview
+  const [priceSource, setPriceSource] = useState(est.priceSource || "legacy");
+  const set = k => v => setE(prev=>({...prev,[k]:v}));
+
+  // Resolve which price table is active based on current selection
+  const activePrices = resolveActivePrices(priceSource, prices, suppliers||[]);
+
+  const selectedSupplierName = priceSource==="legacy" ? "Default DB"
+    : priceSource==="lowest" ? "Lowest Available"
+    : (suppliers||[]).find(s=>s.id===priceSource)?.name || "Unknown";
+
+  const sf       = num(e.totalSF);
+  const matTotal = e.items.reduce((s,i)=>s+num(i.qty)*num(i.price),0);
+  const labor    = sf*num(e.laborRate);
+  const base     = e.includesMat ? matTotal+labor : labor;
+  const profit   = base*num(e.profitPct)/100;
+  const total    = base+profit;
+  const sfRate   = sf>0 ? total/sf : 0;
+
+  // Michigan labor benchmarks
+  const bench = num(e.laborRate)<10?"⚠ Below market ($10–16/SF typical)":num(e.laborRate)>20?"⚠ Above market — verify scope":"✓ In range ($10–20/SF Michigan 2026)";
+  const benchColor = num(e.laborRate)<10||num(e.laborRate)>20 ? C.red : C.grn;
+
+  function loadClientInfo(id) {
+    const c = clients.find(c=>c.id===id);
+    if(c) setE(prev=>({...prev, clientId:id, clientName:c.fname+" "+c.lname, clientPhone:c.phone||"", projectAddress:c.address||""}));
+  }
+
+  function parseGrok() {
+    if (!grokText.trim()) { setGrokMsg("Paste Grok response first."); return; }
+    try {
+      // Strip markdown fences and isolate the JSON array
+      const clean = grokText
+        .replace(/```json|```/g, "")
+        .replace(/^[\s\S]*?(\[)/, "$1")
+        .replace(/(\])[\s\S]*$/, "$1")
+        .trim();
+
+      const arr = JSON.parse(clean);
+      if (!Array.isArray(arr) || arr.length === 0) {
+        setGrokMsg("Parsed JSON but found no items. Make sure Grok returned an array [ { ... } ].");
+        return;
+      }
+
+      // Resolve which price table to use right now
+      const activePrices = resolveActivePrices(priceSource, prices, suppliers);
+
+      // Convert every item — OSB SF→sheets, housewrap SF→rolls, LF→boards, auto-price $0
+      const parsedMaterials = arr.map(raw => {
+        const base = {
+          id:          uid(),
+          description: raw.description || raw.name || raw.item || "",
+          qty:         String(raw.qty || raw.quantity || 1),
+          unit:        raw.unit || "ea",
+          price:       String(raw.price || raw.unit_price || raw.unitPrice || 0),
+          category:    raw.category || "Other",
+          note:        raw.note || raw.notes || raw.location || "",
+        };
+        const desc = base.description.toLowerCase();
+
+        // OSB / sheathing: Grok often gives SF → convert to sheets
+        if ((desc.includes("osb") || desc.includes("sheathing")) && base.unit.toLowerCase()==="sf") {
+          const sfPerSheet = 32;
+          const sheets = Math.ceil(num(base.qty) / sfPerSheet);
+          const match  = smartLookup(base.description, activePrices);
+          return {...base, qty:String(sheets), unit:"sheet",
+            price: match ? String(match.price) : base.price,
+            note: (base.note ? base.note+" | " : "")+`Conv: ${base.qty} SF ÷ 32 = ${sheets} sheets`};
+        }
+
+        // Housewrap: Grok often gives SF → convert to rolls
+        if ((desc.includes("housewrap") || desc.includes("wrap")) && base.unit.toLowerCase()==="sf") {
+          const sfPerRoll = 1000;
+          const rolls = Math.ceil(num(base.qty) / sfPerRoll);
+          const match  = smartLookup(base.description, activePrices);
+          return {...base, qty:String(rolls), unit:"roll",
+            price: match ? String(match.price) : base.price,
+            note: (base.note ? base.note+" | " : "")+`Conv: ${base.qty} SF ÷ ${sfPerRoll} = ${rolls} rolls`};
+        }
+
+        // LF lumber → boards
+        if (base.unit.toLowerCase()==="lf") {
+          const boardLen = detectBoardLength(base.description) || 16;
+          const boards   = Math.ceil(num(base.qty) / boardLen);
+          const match    = smartLookup(base.description, activePrices);
+          return {...base, qty:String(boards), unit:"ea",
+            price: match ? String(match.price) : base.price,
+            note: (base.note ? base.note+" | " : "")+`Conv: ${base.qty} LF ÷ ${boardLen}ft = ${boards} pcs`};
+        }
+
+        // Auto-price $0 items
+        if (num(base.price) === 0) {
+          const match = smartLookup(base.description, activePrices);
+          if (match) return {...base, price: String(match.price)};
+        }
+
+        return base;
+      });
+
+      // Auto-detect totalSF from items named "total living" or "total sf"
+      let suggestedSF = "";
+      arr.forEach(raw => {
+        const d = (raw.description||"").toLowerCase();
+        if ((d.includes("total") && d.includes("living")) || (d.includes("total") && d.includes("sf"))) {
+          if (raw.qty && num(raw.qty) > 100) suggestedSF = String(raw.qty);
+        }
+        if (raw.totalSF) suggestedSF = String(raw.totalSF);
+      });
+
+      setE(prev => ({...prev, items: parsedMaterials, totalSF: suggestedSF || prev.totalSF}));
+
+      let msg = `✓ Imported ${parsedMaterials.length} items`;
+      if (suggestedSF) msg += ` — ${suggestedSF} SF auto-filled`;
+      const lfConverted = parsedMaterials.filter(i=>i.note&&i.note.includes("Conv:")).length;
+      if (lfConverted > 0) msg += ` — ${lfConverted} units auto-converted`;
+      setGrokMsg(msg);
+      setTab("materials");
+
+    } catch (err) {
+      setGrokMsg("Could not parse JSON. "+err.message+". Make sure Grok responded with only a JSON array.");
+    }
+  }
+  function handleSave() {
+    if(!e.clientName.trim()) { onToast("Enter client name","err"); return; }
+    if(!e.totalSF || num(e.totalSF)<=0) { onToast("Enter total square footage","err"); return; }
+    onSave(e);
+  }
+
+  const TABS = [
+    {k:"info",    label:"1. Project Info"},
+    {k:"grok",    label:"2. Import from Grok"},
+    {k:"materials",label:"3. Material List"},
+    {k:"pricing", label:"4. Pricing"},
+    {k:"preview", label:"5. Preview & Save"},
+  ];
+
+  return (
+    <div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+        <div>
+          <h2 style={{fontWeight:900,fontSize:20,textTransform:"uppercase",letterSpacing:1}}>New Estimate #{e.number}</h2>
+          <div style={{fontSize:12,color:C.mut,marginTop:2}}>Follow the steps 1–5 in order. You can go back to any step anytime.</div>
+        </div>
+        <Btn v="sec" onClick={onCancel}>Cancel</Btn>
+      </div>
+
+      {/* Step tabs */}
+      <div style={{display:"flex",borderBottom:"1px solid "+C.brd,marginBottom:20,overflowX:"auto"}}>
+        {TABS.map(t=>(
+          <button key={t.k} onClick={()=>setTab(t.k)}
+            style={{background:"none",border:"none",padding:"10px 18px",cursor:"pointer",fontFamily:"inherit",
+              fontSize:13,fontWeight:700,color:tab===t.k?C.acc:C.mut,whiteSpace:"nowrap",
+              borderBottom:"3px solid "+(tab===t.k?C.acc:"transparent"),marginBottom:-1,transition:"color .15s"}}>
+            {t.label}
+          </button>
+        ))}
+        {/* Live cost in tab bar */}
+        <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:16,paddingRight:4,fontSize:13}}>
+          {sf>0&&<span style={{color:C.mut}}>{sf.toLocaleString()} SF</span>}
+          {matTotal>0&&<span style={{color:C.txt}}>Mat: <b style={{color:C.acc}}>{$(matTotal)}</b></span>}
+          {labor>0&&<span style={{color:C.txt}}>Labor: <b style={{color:C.acc}}>{$(labor)}</b></span>}
+          <span style={{color:C.acc,fontWeight:900,fontSize:15}}>Total: {$(total)}</span>
+        </div>
+      </div>
+
+      {/* ── STEP 1: PROJECT INFO ── */}
+      {tab==="info" && (
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+          <Card accent>
+            <CardH>Client</CardH>
+            {clients.length>0 && (
+              <Pick label="Select Existing Client" value={e.clientId} onChange={id=>loadClientInfo(id)}
+                options={[{v:"",l:"— type manually below —"},...clients.map(c=>({v:c.id,l:c.fname+" "+c.lname}))]}/>
+            )}
+            <Field label="Client Name *" value={e.clientName} onChange={set("clientName")} placeholder="John Smith"/>
+            <Field label="Phone" value={e.clientPhone} onChange={set("clientPhone")} placeholder="(555) 000-0000"/>
+            <Field label="Project Address" value={e.projectAddress} onChange={set("projectAddress")} placeholder="123 Main St, Detroit MI 48201"/>
+          </Card>
+          <Card>
+            <CardH>Project</CardH>
+            <Field label="Total Living SF *" value={e.totalSF} onChange={set("totalSF")} type="number" placeholder="e.g. 2400" suffix="SF"
+              tip="all heated floors — used for labor calc"/>
+            <Field label="Date" value={e.date} onChange={set("date")} type="date"/>
+            <Field label="Estimate #" value={e.number} onChange={set("number")} readOnly/>
+          </Card>
+          <Card style={{gridColumn:"1/-1"}}>
+            <CardH>Scope of Work</CardH>
+            <Field value={e.scope} onChange={set("scope")} rows={3}/>
+          </Card>
+          <div style={{gridColumn:"1/-1",display:"flex",justifyContent:"flex-end"}}>
+            <Btn onClick={()=>setTab("grok")} sz="lg">Next: Import from Grok →</Btn>
+          </div>
+        </div>
+      )}
+
+      {/* ── STEP 2: GROK IMPORT ── */}
+      {tab==="grok" && (
+        <div>
+          <Card accent>
+            <CardH>How Grok Works With ProFrame</CardH>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:16}}>
+              {[
+                ["Step 1","Go to grok.com (free) or ChatGPT"],
+                ["Step 2","Upload or describe your PDF floor plans"],
+                ["Step 3","Copy the prompt below and paste it into Grok"],
+                ["Step 4","Copy Grok's entire response and paste it here"],
+              ].map(([s,t])=>(
+                <div key={s} style={{background:C.sur2,borderRadius:8,padding:12,display:"flex",gap:10,alignItems:"flex-start"}}>
+                  <div style={{background:C.acc,color:"#000",borderRadius:20,width:24,height:24,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:900,fontSize:12,flexShrink:0}}>{s.slice(-1)}</div>
+                  <div style={{fontSize:13}}>{t}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{background:C.sur2,fontWeight:700,fontSize:13,color:C.acc,padding:"8px 14px",borderRadius:8,marginBottom:8}}>
+              ⚠ Grok MUST respond in JSON format. If it doesn&apos;t, say: &quot;Respond ONLY in JSON array format, nothing else."
+            </div>
+          </Card>
+
+          <Card>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+              <CardH>Prompt to Copy into Grok</CardH>
+              <Btn sz="sm" onClick={()=>{try{navigator.clipboard.writeText(GROK_PROMPT);}catch(e){}onToast("Prompt copied!","ok");}}>
+                Copy Prompt
+              </Btn>
+            </div>
+            <pre style={{background:C.sur3,borderRadius:8,padding:14,fontSize:10,color:C.mut,lineHeight:1.6,
+              whiteSpace:"pre-wrap",maxHeight:180,overflow:"auto",fontFamily:"monospace"}}>{GROK_PROMPT}</pre>
+          </Card>
+
+          <Card>
+            <CardH>Paste Grok&apos;s JSON Response Here</CardH>
+            <Field value={grokText} onChange={setGrok} rows={8} placeholder='Paste Grok response here... should start with [ {"description":...'/>
+            <div style={{display:"flex",gap:10,alignItems:"center",marginTop:8}}>
+              <Btn sz="lg" onClick={parseGrok}>Import Material List from Grok</Btn>
+              {grokMsg && <span style={{fontSize:13,color:grokMsg.startsWith("✓")?C.grn:C.red,fontWeight:700}}>{grokMsg}</span>}
+            </div>
+            <Hr/>
+            <div style={{fontSize:12,color:C.mut,lineHeight:1.8}}>
+              <b style={{color:C.txt}}>No Grok yet?</b> You can skip this step and manually add materials in Step 3.
+              <br/><b style={{color:C.txt}}>Grok gave plain text?</b> Tell it: <span style={{fontFamily:"monospace",background:C.sur3,padding:"1px 6px",borderRadius:4}}>"Reformat your response as a JSON array only."</span>
+            </div>
+          </Card>
+
+          <div style={{display:"flex",justifyContent:"space-between"}}>
+            <Btn v="sec" onClick={()=>setTab("info")}>← Back</Btn>
+            <Btn onClick={()=>setTab("materials")} sz="lg">Next: Material List →</Btn>
+          </div>
+        </div>
+      )}
+
+      {/* ── STEP 3: MATERIAL LIST ── */}
+      {tab==="materials" && (
+        <div>
+          <div style={{background:C.sur2,border:"1px solid "+C.brd,borderRadius:10,padding:"12px 16px",marginBottom:12,fontSize:13,color:C.mut,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+            <span><b style={{color:C.txt}}>Edit your material list below.</b> Change quantities, prices, descriptions. Add or delete rows.</span>
+            <span style={{background:C.acc+"22",border:"1px solid "+C.acc,borderRadius:20,padding:"3px 12px",fontSize:11,fontWeight:700,color:C.acc}}>
+              Prices from: {selectedSupplierName}
+            </span>
+          </div>
+          <MatEditor items={e.items} onChange={items=>setE(prev=>({...prev,items}))} prices={activePrices}/>
+          <div style={{display:"flex",justifyContent:"space-between",marginTop:16}}>
+            <Btn v="sec" onClick={()=>setTab("grok")}>← Back</Btn>
+            <Btn onClick={()=>setTab("pricing")} sz="lg">Next: Pricing →</Btn>
+          </div>
+        </div>
+      )}
+
+      {/* ── STEP 4: PRICING ── */}
+      {tab==="pricing" && (
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+
+          {/* Price Source */}
+          <Card>
+            <CardH>Price Source</CardH>
+            <p style={{fontSize:12,color:C.mut,marginBottom:12}}>
+              Choose which supplier's prices to use. Switching applies to the "Auto-Fill" button in the material list — or click "Apply to All $0" below.
+            </p>
+            <Pick
+              label="Use prices from"
+              value={priceSource}
+              onChange={v=>{setPriceSource(v);setE(prev=>({...prev,priceSource:v}));}}
+              options={[
+                {v:"legacy", l:"Default / Built-in Prices"},
+                ...((suppliers||[]).map(s=>({v:s.id, l:s.name}))),
+                {v:"lowest", l:"★ Lowest Available (all suppliers)"},
+              ]}
+            />
+            {priceSource!=="legacy" && (
+              <div style={{background:C.acc+"18",border:"1px solid "+C.acc,borderRadius:8,padding:10,fontSize:12,marginTop:6}}>
+                <b style={{color:C.acc}}>{selectedSupplierName}</b> prices active.
+                {priceSource==="lowest" && <span style={{color:C.mut,marginLeft:6}}>Cheapest price per item across all suppliers.</span>}
+              </div>
+            )}
+            <div style={{marginTop:10}}>
+              <Btn sz="sm" onClick={()=>{
+                const updated = e.items.map(item=>{
+                  const match = smartLookup(item.description, activePrices);
+                  if(match && num(item.price)===0) return {...item, price:String(match.price)};
+                  return item;
+                });
+                setE(prev=>({...prev,items:updated}));
+              }}>Apply Prices to All $0 Items</Btn>
+              <span style={{marginLeft:10,fontSize:11,color:C.mut}}>Fills only unpriced items, won&apos;t overwrite your edits</span>
+            </div>
+          </Card>
+
+          <Card accent>
+            <CardH>Labor Rate</CardH>
+            <p style={{fontSize:12,color:C.mut,marginBottom:12}}>
+              Enter what you charge per SF. The material list handles material costs separately.
+              This is your crew labor charge to the client.
+            </p>
+            <Field label="Labor Rate" value={e.laborRate} onChange={set("laborRate")} type="number" suffix="$/SF"
+              tip="charged to client per square foot"/>
+            {/* Quick rate buttons */}
+            <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap"}}>
+              {[["10","Budget"],["12","Standard"],["14","Good"],["16","Premium"],["18","Complex"],["20","High-end"]].map(([r,l])=>(
+                <button key={r} onClick={()=>set("laborRate")(r)}
+                  style={{background:e.laborRate===r?C.acc:C.sur3,color:e.laborRate===r?"#000":C.mut,
+                    border:"1px solid "+(e.laborRate===r?C.acc:C.brd),borderRadius:8,padding:"6px 14px",
+                    fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                  ${r}/SF<br/><span style={{fontSize:10,fontWeight:400}}>{l}</span>
+                </button>
+              ))}
+            </div>
+            <div style={{background:benchColor+"22",border:"1px solid "+benchColor,borderRadius:8,padding:10,fontSize:12,color:benchColor,fontWeight:700}}>
+              {bench}
+            </div>
+
+            <Hr/>
+            <CardH>What to Include</CardH>
+            <div style={{display:"flex",gap:10}}>
+              {[[true,"Material + Labor"],[false,"Labor Only"]].map(([v,l])=>(
+                <div key={l} onClick={()=>set("includesMat")(v)}
+                  style={{flex:1,textAlign:"center",padding:12,borderRadius:8,cursor:"pointer",
+                    border:"2px solid "+(e.includesMat===v?C.acc:C.brd),
+                    background:e.includesMat===v?C.acc+"22":C.sur2,
+                    fontWeight:700,fontSize:13,color:e.includesMat===v?C.acc:C.mut}}>
+                  {l}
+                </div>
+              ))}
+            </div>
+
+            <Hr/>
+            <CardH>Profit / Overhead</CardH>
+            <Field label="Profit %" value={e.profitPct} onChange={set("profitPct")} type="number" suffix="%"
+              tip="0% = pass-through, 20% = standard"/>
+          </Card>
+
+          <Card>
+            <CardH>Cost Summary</CardH>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
+              <BigNum value={sf.toLocaleString()+" SF"} label="Living Area"/>
+              <BigNum value={$(matTotal)} label="Materials"/>
+              <BigNum value={$(labor)} label={`Labor (${sf.toLocaleString()} SF × $${num(e.laborRate).toFixed(2)})`}/>
+              <BigNum value={$(base)} label="Your Cost (Mat+Labor)"/>
+              <BigNum value={$(profit)} label={`Profit (${e.profitPct}%)`} accent/>
+              <BigNum value={$(total)} label="Client Total" accent/>
+            </div>
+
+            <div style={{background:C.sur2,borderRadius:8,padding:14,lineHeight:2.2,fontSize:13}}>
+              {[
+                ["Materials/SF",     sf>0?("$"+(matTotal/sf).toFixed(2)):"—"],
+                ["Labor/SF",         sf>0?("$"+(labor/sf).toFixed(2)):"—"],
+                ["Profit/SF",        sf>0?("$"+(profit/sf).toFixed(2)):"—"],
+                ["TOTAL/SF",         sf>0?("$"+sfRate.toFixed(2)):"—"],
+              ].map(([l,v],i)=>(
+                <div key={l} style={{display:"flex",justifyContent:"space-between",
+                  borderTop:i===3?"1px solid "+C.brd:"none",paddingTop:i===3?6:0,
+                  fontWeight:i===3?900:400,color:i===3?C.acc:C.txt}}>
+                  <span>{l}</span><span style={{fontFamily:"monospace"}}>{v}</span>
+                </div>
+              ))}
+            </div>
+
+            <Hr/>
+            <CardH>Payment Schedule</CardH>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+              <Field label="Deposit %" value={e.depPct} onChange={set("depPct")} type="number" suffix="%"/>
+              <Field label="Withholding %" value={e.withPct} onChange={set("withPct")} type="number" suffix="%"/>
+            </div>
+            {total>0 && (
+              <div style={{fontSize:12,color:C.mut,lineHeight:2.2}}>
+                {[
+                  ["Deposit at signing",        total*num(e.depPct)/100],
+                  ["Progress payment",           total*(100-num(e.depPct)-num(e.withPct))/100],
+                  ["Withholding at inspection",  total*num(e.withPct)/100],
+                ].map(([l,v])=>(
+                  <div key={l} style={{display:"flex",justifyContent:"space-between"}}>
+                    <span>{l}</span><b style={{color:C.acc,fontFamily:"monospace"}}>{$(v)}</b>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+
+          <div style={{gridColumn:"1/-1",display:"flex",justifyContent:"space-between"}}>
+            <Btn v="sec" onClick={()=>setTab("materials")}>← Back</Btn>
+            <Btn onClick={()=>setTab("preview")} sz="lg">Preview Estimate →</Btn>
+          </div>
+        </div>
+      )}
+
+      {/* ── STEP 5: PREVIEW & SAVE ── */}
+      {tab==="preview" && (
+        <div>
+          <div style={{display:"flex",gap:10,marginBottom:20,flexWrap:"wrap",alignItems:"center"}} className="no-print">
+            <Btn v="sec" onClick={()=>setTab("pricing")}>← Back to Pricing</Btn>
+            <Btn onClick={()=>window.print()} v="sec">🖨 Print / Save PDF</Btn>
+            <Btn onClick={handleSave} v="grn" sz="lg">💾 Save Estimate</Btn>
+          </div>
+          <div className="print-area">
+            <PrintDoc est={e} co={window.__pf_settings||{}}/>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── ESTIMATE LIST VIEW ───────────────────────────────────────────────────────
+function EstimateView({est, co, onBack, onDelete, onApprove}) {
+  const matTotal = est.items.reduce((s,i)=>s+num(i.qty)*num(i.price),0);
+  const labor    = num(est.totalSF)*num(est.laborRate);
+  const base     = est.includesMat ? matTotal+labor : labor;
+  const profit   = base*num(est.profitPct)/100;
+  const total    = base+profit;
+
+  return (
+    <div>
+      <div style={{display:"flex",gap:10,marginBottom:20,flexWrap:"wrap",alignItems:"center"}} className="no-print">
+        <button onClick={onBack} style={{background:"none",border:"none",color:C.mut,cursor:"pointer",fontFamily:"inherit",fontSize:13,display:"flex",alignItems:"center",gap:4}}>
+          ← Back
+        </button>
+        <div style={{flex:1,fontWeight:700,fontSize:15}}>#{est.number} — {est.clientName}</div>
+        <Btn v="sec" onClick={()=>window.print()}>🖨 Print / Save PDF</Btn>
+        <Btn onClick={onApprove} v={est.status==="approved"?"sec":"grn"}>
+          {est.status==="approved"?"Revert to Pending":"✓ Mark Approved"}
+        </Btn>
+        <Btn v="red" onClick={onDelete}>Delete</Btn>
+      </div>
+      <div className="print-area">
+        <PrintDoc est={est} co={co}/>
+      </div>
+    </div>
+  );
+}
+
+// ─── CLIENT FORM ──────────────────────────────────────────────────────────────
+function ClientForm({initial, onSave, onBack}) {
+  const [f,setF] = useState({fname:"",lname:"",phone:"",email:"",address:"",notes:"",...initial});
+  const set = k => v => setF(x=>({...x,[k]:v}));
+  return (
+    <div>
+      <button onClick={onBack} style={{background:"none",border:"none",color:C.mut,cursor:"pointer",fontFamily:"inherit",fontSize:13,marginBottom:14}}>← Back</button>
+      <Card>
+        <CardH>{initial.id?"Edit Client":"New Client"}</CardH>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+          <Field label="First Name *" value={f.fname} onChange={set("fname")} placeholder="John"/>
+          <Field label="Last Name *"  value={f.lname} onChange={set("lname")} placeholder="Smith"/>
+          <Field label="Phone"        value={f.phone} onChange={set("phone")} placeholder="(555) 000-0000"/>
+          <Field label="Email"        value={f.email} onChange={set("email")} placeholder="john@email.com" type="email"/>
+        </div>
+        <Field label="Project Address" value={f.address} onChange={set("address")} placeholder="123 Main St, Detroit MI 48201"/>
+        <Field label="Notes" value={f.notes} onChange={set("notes")} rows={2} placeholder="Lot #, project details..."/>
+        <Btn sz="lg" onClick={()=>{if(!f.fname.trim()||!f.lname.trim()){alert("First and last name required.");return;}onSave({...f,id:f.id||uid()});}}>
+          Save Client
+        </Btn>
+      </Card>
+    </div>
+  );
+}
+
+// ─── SETTINGS ────────────────────────────────────────────────────────────────
+function Settings({settings, onSave, prices, onSavePrices, onExport, onImport}) {
+  const [f,setF]   = useState({...settings});
+  const [P,setP]   = useState({...prices});
+  const fileRef    = useRef();
+  const set = k => v => setF(x=>({...x,[k]:v}));
+  const setP_ = k => v => setP(x=>({...x,[k]:{...x[k],price:v}}));
+
+  return (
+    <div>
+      <h2 style={{fontWeight:900,fontSize:22,textTransform:"uppercase",letterSpacing:1,marginBottom:20}}>Settings</h2>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+        <Card>
+          <CardH>Company Info</CardH>
+          <Field label="Company Name" value={f.name||""} onChange={set("name")} placeholder="Carreno Framing LLC"/>
+          <Field label="License #" value={f.license||""} onChange={set("license")}/>
+          <Field label="Phone" value={f.phone||""} onChange={set("phone")}/>
+          <Field label="Email" value={f.email||""} onChange={set("email")} type="email"/>
+          <Field label="Address" value={f.address||""} onChange={set("address")}/>
+          <Btn onClick={()=>onSave(f)}>Save Company Info</Btn>
+        </Card>
+        <Card>
+          <CardH>Backup & Restore</CardH>
+          <p style={{fontSize:12,color:C.mut,marginBottom:14}}>Export everything (clients, estimates, settings) to a JSON file you can keep as backup or load on another device.</p>
+          <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+            <Btn v="grn" onClick={onExport}>Export Backup JSON</Btn>
+            <Btn v="sec" onClick={()=>fileRef.current.click()}>Import Backup JSON</Btn>
+          </div>
+          <input ref={fileRef} type="file" accept=".json" style={{display:"none"}}
+            onChange={e=>{const f=e.target.files[0];if(f){const r=new FileReader();r.onload=ev=>onImport(ev.target.result);r.readAsText(f);}}}/>
+        </Card>
+      </div>
+      <Card>
+        <CardH>Material Prices Database</CardH>
+        <p style={{fontSize:12,color:C.mut,marginBottom:14}}>These prices are used for auto-suggestions when you import from Grok. Update them to match your local supplier.</p>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:10}}>
+          {Object.entries(P).map(([name,data])=>(
+            <div key={name} style={{background:C.sur2,borderRadius:8,padding:10}}>
+              <div style={{fontSize:11,color:C.mut,marginBottom:4,fontWeight:600}}>{name}</div>
+              <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                <input type="number" value={data.price} onChange={e=>setP_(name)(e.target.value)}
+                  style={{...IS({padding:"5px 8px",fontSize:13}),flex:1}}/>
+                <span style={{fontSize:11,color:C.mut}}>/{data.unit}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div style={{marginTop:16,display:"flex",gap:10}}>
+          <Btn onClick={()=>onSavePrices(P)}>Save Prices</Btn>
+          <Btn v="sec" onClick={()=>{setP({...DEFAULT_PRICES});onSavePrices({...DEFAULT_PRICES});}}>Reset to Defaults</Btn>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+// ─── ROOT APP ─────────────────────────────────────────────────────────────────
+function App() {
+  const saved = load()||{};
+  const [page,setPage]             = useState("dashboard");
+  const [clients,setClients]       = useState(saved.clients||[]);
+  const [estimates,setEstimates]   = useState(saved.estimates||[]);
+  const [settings,setSettings]     = useState(saved.settings||{name:"",license:"",phone:"",email:"",address:""});
+  const [prices,setPrices]         = useState(saved.prices||{...DEFAULT_PRICES});
+  const [suppliers,setSuppliers]   = useState(saved.suppliers||[...DEFAULT_SUPPLIERS]);
+  const [editClient,setEditClient] = useState(null);
+  const [viewEstId,setViewEstId]   = useState(null);
+  const [editEst,setEditEst]       = useState(null);
+  const [toast,setToast]           = useState(null);
+
+  // Expose settings for PrintDoc
+  window.__pf_settings = settings;
+
+  useEffect(()=>{ save({clients,estimates,settings,prices,suppliers}); },[clients,estimates,settings,prices,suppliers]);
+
+  function showToast(msg,type="ok") {
+    setToast({msg,ok:type==="ok"});
+    setTimeout(()=>setToast(null),3000);
+  }
+
+  function saveClient(c) {
+    setClients(prev=>prev.find(x=>x.id===c.id)?prev.map(x=>x.id===c.id?c:x):[...prev,c]);
+    showToast("Client saved!");
+    setPage("clients");
+  }
+  function deleteClient(id) {
+    if(!window.confirm("Delete this client and all their estimates?")) return;
+    setClients(prev=>prev.filter(c=>c.id!==id));
+    setEstimates(prev=>prev.filter(e=>e.clientId!==id));
+    showToast("Client deleted.");
+  }
+  function saveEstimate(est) {
+    setEstimates(prev=>prev.find(e=>e.id===est.id)?prev.map(e=>e.id===est.id?est:e):[...prev,est]);
+    showToast("Estimate saved!");
+    setPage("dashboard");
+    setEditEst(null);
+  }
+  function deleteEstimate(id) {
+    if(!window.confirm("Delete this estimate? Cannot be undone.")) return;
+    setEstimates(prev=>prev.filter(e=>e.id!==id));
+    showToast("Deleted.");
+    setPage("dashboard");
+  }
+  function approveEstimate(id) {
+    setEstimates(prev=>prev.map(e=>e.id===id?{...e,status:e.status==="approved"?"pending":"approved"}:e));
+  }
+  function exportData() {
+    const blob = new Blob([JSON.stringify({clients,estimates,settings,prices,suppliers},null,2)],{type:"application/json"});
+    const a=document.createElement("a"); a.href=URL.createObjectURL(blob);
+    a.download="proframe-backup-"+new Date().toISOString().split("T")[0]+".json"; a.click();
+    showToast("Backup exported!");
+  }
+  function importData(text) {
+    try {
+      const d=JSON.parse(text);
+      if(d.clients)   setClients(d.clients);
+      if(d.estimates) setEstimates(d.estimates);
+      if(d.settings)  setSettings(d.settings);
+      if(d.prices)    setPrices(d.prices);
+      if(d.suppliers) setSuppliers(d.suppliers);
+      showToast("Data imported!");
+    } catch(e){ showToast("Import failed","err"); }
+  }
+
+  const viewingEst = estimates.find(e=>e.id===viewEstId);
+
+  // Dashboard stats
+  const pendingTotal  = estimates.filter(e=>e.status!=="approved").reduce((s,e)=>{
+    const mat=e.items.reduce((a,i)=>a+num(i.qty)*num(i.price),0);
+    const lab=num(e.totalSF)*num(e.laborRate);
+    const base=e.includesMat?mat+lab:lab;
+    return s+base*(1+num(e.profitPct)/100);
+  },0);
+  const approvedTotal = estimates.filter(e=>e.status==="approved").reduce((s,e)=>{
+    const mat=e.items.reduce((a,i)=>a+num(i.qty)*num(i.price),0);
+    const lab=num(e.totalSF)*num(e.laborRate);
+    const base=e.includesMat?mat+lab:lab;
+    return s+base*(1+num(e.profitPct)/100);
+  },0);
+
+  function NavBtn({pid,label}) {
+    return (
+      <button onClick={()=>setPage(pid)}
+        style={{background:"none",border:"none",color:page===pid?C.acc:C.mut,padding:"0 16px",
+          cursor:"pointer",fontFamily:"inherit",fontSize:13,fontWeight:700,height:56,
+          borderBottom:"2px solid "+(page===pid?C.acc:"transparent"),transition:"color .15s"}}>
+        {label}
+      </button>
+    );
+  }
+
+  return (
+    <div style={{background:C.bg,minHeight:"100vh",color:C.txt}}>
+      {/* Top nav */}
+      <div className="no-print" style={{background:C.sur,borderBottom:"2px solid "+C.acc,height:56,
+        padding:"0 24px",display:"flex",alignItems:"center",justifyContent:"space-between",
+        position:"sticky",top:0,zIndex:100}}>
+        <div style={{fontWeight:900,fontSize:20,letterSpacing:3,color:C.acc,textTransform:"uppercase",cursor:"pointer"}}
+          onClick={()=>setPage("dashboard")}>
+          Pro<span style={{color:"#e04520"}}>Frame</span>
+          <span style={{fontSize:10,color:C.mut,marginLeft:8,fontWeight:400,letterSpacing:1}}>v4.1</span>
+        </div>
+        <div style={{display:"flex",height:"100%"}}>
+          <NavBtn pid="dashboard"   label="Dashboard"/>
+          <NavBtn pid="clients"     label="Clients"/>
+          <NavBtn pid="suppliers"   label="Suppliers"/>
+          <NavBtn pid="spans"       label="Span Calculator"/>
+          <NavBtn pid="settings"    label="Settings"/>
+        </div>
+      </div>
+
+      <div style={{padding:24,maxWidth:1360,margin:"0 auto"}}>
+
+        {/* DASHBOARD */}
+        {page==="dashboard" && !editEst && !viewEstId && (
+          <div>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+              <h2 style={{fontWeight:900,fontSize:22,textTransform:"uppercase",letterSpacing:1}}>Dashboard</h2>
+              <Btn sz="lg" onClick={()=>{setEditEst(NEW_EST());setPage("dashboard");}}>+ New Estimate</Btn>
+            </div>
+            {/* Stats */}
+            <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:20}}>
+              <BigNum value={clients.length} label="Clients"/>
+              <BigNum value={estimates.length} label="Estimates"/>
+              <BigNum value={$(pendingTotal)} label="Pending"/>
+              <BigNum value={$(approvedTotal)} label="Approved" accent/>
+            </div>
+            {/* Estimate list */}
+            <Card>
+              <CardH>All Estimates</CardH>
+              {!estimates.length ? (
+                <div style={{textAlign:"center",padding:"40px 0",color:C.mut}}>
+                  <div style={{fontSize:36,marginBottom:8}}>📋</div>
+                  <p>No estimates yet. Click "New Estimate" to start.</p>
+                </div>
+              ) : (
+                <div style={{overflowX:"auto"}}>
+                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}>
+                    <thead>
+                      <tr>{["Est #","Client","Date","SF","Materials","Labor","Total","Status",""].map(h=>(
+                        <th key={h} style={{background:C.sur3,color:C.mut,fontSize:11,textTransform:"uppercase",
+                          padding:"9px 12px",textAlign:"left",borderBottom:"1px solid "+C.brd,letterSpacing:.5}}>{h}</th>
+                      ))}</tr>
+                    </thead>
+                    <tbody>
+                      {[...estimates].sort((a,b)=>b.createdAt-a.createdAt).map(est=>{
+                        const mat=est.items.reduce((s,i)=>s+num(i.qty)*num(i.price),0);
+                        const lab=num(est.totalSF)*num(est.laborRate);
+                        const base=est.includesMat?mat+lab:lab;
+                        const tot=base*(1+num(est.profitPct)/100);
+                        const TD={padding:"9px 12px"};
+                        return (
+                          <tr key={est.id} style={{borderBottom:"1px solid "+C.brd}}>
+                            <td style={{...TD,fontFamily:"monospace",fontSize:12}}>{est.number}</td>
+                            <td style={TD}>{est.clientName||"—"}</td>
+                            <td style={{...TD,color:C.mut}}>{est.date}</td>
+                            <td style={{...TD,fontFamily:"monospace"}}>{num(est.totalSF).toLocaleString()}</td>
+                            <td style={{...TD,fontFamily:"monospace"}}>{mat>0?$(mat):"—"}</td>
+                            <td style={{...TD,fontFamily:"monospace"}}>{lab>0?$(lab):"—"}</td>
+                            <td style={{...TD,fontFamily:"monospace",fontWeight:700,color:C.acc}}>{$(tot)}</td>
+                            <td style={TD}>
+                              <span style={{background:est.status==="approved"?C.grn+"28":C.acc+"28",
+                                color:est.status==="approved"?C.grn:C.acc,padding:"2px 10px",borderRadius:20,
+                                fontSize:11,fontWeight:700,textTransform:"uppercase"}}>{est.status||"pending"}</span>
+                            </td>
+                            <td style={TD}>
+                              <div style={{display:"flex",gap:6}}>
+                                <Btn sz="sm" v="sec" onClick={()=>{setViewEstId(est.id);}}>View</Btn>
+                                <Btn sz="sm" v="sec" onClick={()=>{setEditEst({...est});}}>Edit</Btn>
+                                <Btn sz="sm" v="red" onClick={()=>deleteEstimate(est.id)}>Del</Btn>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </Card>
+          </div>
+        )}
+
+        {/* NEW / EDIT ESTIMATE */}
+        {page==="dashboard" && editEst && (
+          <EstimateEditor
+            clients={clients}
+            est={editEst}
+            onSave={saveEstimate}
+            onCancel={()=>{setEditEst(null);setViewEstId(null);}}
+            prices={prices}
+            suppliers={suppliers}
+            onToast={showToast}
+          />
+        )}
+
+        {/* VIEW ESTIMATE */}
+        {page==="dashboard" && !editEst && viewEstId && viewingEst && (
+          <EstimateView
+            est={viewingEst}
+            co={settings}
+            onBack={()=>setViewEstId(null)}
+            onDelete={()=>deleteEstimate(viewEstId)}
+            onApprove={()=>approveEstimate(viewEstId)}
+          />
+        )}
+
+        {/* CLIENTS */}
+        {page==="clients" && !editClient && (
+          <div>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+              <h2 style={{fontWeight:900,fontSize:22,textTransform:"uppercase",letterSpacing:1}}>Clients</h2>
+              <Btn onClick={()=>setEditClient({})}>+ Add Client</Btn>
+            </div>
+            {!clients.length ? (
+              <Card style={{textAlign:"center",padding:48,color:C.mut}}>
+                <div style={{fontSize:40,marginBottom:8}}>👷</div>
+                <p style={{marginBottom:14}}>No clients yet.</p>
+                <Btn onClick={()=>setEditClient({})}>Add First Client</Btn>
+              </Card>
+            ) : clients.map(c=>{
+              const cEsts = estimates.filter(e=>e.clientId===c.id);
+              const cTot  = cEsts.reduce((s,e)=>{
+                const mat=e.items.reduce((a,i)=>a+num(i.qty)*num(i.price),0);
+                const lab=num(e.totalSF)*num(e.laborRate);
+                const base=e.includesMat?mat+lab:lab;
+                return s+base*(1+num(e.profitPct)/100);
+              },0);
+              return (
+                <div key={c.id} style={{background:C.sur,border:"1px solid "+C.brd,borderRadius:12,padding:20,marginBottom:12}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                    <div>
+                      <div style={{fontWeight:700,fontSize:16}}>{c.fname} {c.lname}</div>
+                      <div style={{color:C.mut,fontSize:13,marginTop:2}}>{c.address||"No address"}</div>
+                      <div style={{fontSize:12,color:C.mut,marginTop:6}}>{c.phone||""}{c.email?" · "+c.email:""}</div>
+                      <div style={{marginTop:8,fontSize:12,color:C.blu}}>{cEsts.length} estimate{cEsts.length!==1?"s":""}</div>
+                    </div>
+                    <div style={{textAlign:"right"}}>
+                      <div style={{fontWeight:900,fontSize:22,color:C.acc}}>{$(cTot)}</div>
+                      <div style={{display:"flex",gap:8,marginTop:8,justifyContent:"flex-end"}}>
+                        <Btn sz="sm" v="sec" onClick={()=>setEditClient(c)}>Edit</Btn>
+                        <Btn sz="sm" v="red" onClick={()=>deleteClient(c.id)}>Delete</Btn>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {page==="clients" && editClient && (
+          <ClientForm initial={editClient} onSave={saveClient} onBack={()=>setEditClient(null)}/>
+        )}
+
+        {/* SPAN CALCULATOR */}
+        {page==="spans" && <SpanCalc/>}
+
+        {/* SUPPLIERS */}
+        {page==="suppliers" && (
+          <SuppliersTab
+            suppliers={suppliers}
+            setSuppliers={s=>{setSuppliers(typeof s==="function"?s(suppliers):s);}}
+            masterMaterials={MASTER_MATERIALS}
+          />
+        )}
+
+        {/* SETTINGS */}
+        {page==="settings" && (
+          <Settings settings={settings} onSave={s=>{setSettings(s);showToast("Settings saved!");}}
+            prices={prices} onSavePrices={p=>{setPrices(p);showToast("Prices saved!");}}
+            onExport={exportData} onImport={importData}/>
+        )}
+
+      </div>
+
+      {toast && <Toast msg={toast.msg} ok={toast.ok}/>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App));
+</script>
+</body>
+</html>
 // ─── UTILS ───────────────────────────────────────────────────────────────────
 const uid  = () => Math.random().toString(36).slice(2,9);
 const num  = v  => parseFloat(v)||0;
