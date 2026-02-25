@@ -1076,24 +1076,30 @@ function EstimateEditor({clients, est, onSave, onCancel, prices, onToast}) {
 
     if (Array.isArray(arr) && arr.length > 0) {
       arr.forEach(item => {
-        if (item.description && item.qty) {
-          // Normal material item
-          parsedMaterials.push({
-            id: uid(),
-            description: item.description || item.name || item.item || "",
-            qty: String(item.qty || item.quantity || 1),
-            unit: item.unit || "ea",
-            price: String(item.price || item.unit_price || item.unitPrice ||
-              smartLookup(item.description || "", prices)?.price || "0"),
-            category: item.category || "Other",
-            note: item.note || item.notes || item.location || ""
-          });
-        } else if (item.type === "summary") {
-          suggestedSF = String(item.estimated_heated_sf || item.estimated_total_sf || item.estimated_sf || "");
-          summaryNote = item.note || "";
-        }
-      });
-
+       if (item.description.toLowerCase().includes("osb") || item.description.toLowerCase().includes("sheathing")) {
+  const sfPerSheet = 32; // 4x8 sheet
+  const sheets = Math.ceil(num(item.qty) / sfPerSheet);
+  const match = smartLookup(item.description, prices);
+  return {
+    ...item,
+    qty: String(sheets),
+    unit: "sheet",
+    price: match ? String(match.price) : item.price,
+    note: (item.note || "") + ` | Conv: ${item.qty} SF ÷ 32 = ${sheets} sheets`
+  };
+}
+else if (item.description.toLowerCase().includes("housewrap") || item.description.toLowerCase().includes("wrap")) {
+  const sfPerRoll = 1000; // adjust to 900/1350 if needed
+  const rolls = Math.ceil(num(item.qty) / sfPerRoll);
+  const match = smartLookup(item.description, prices);
+  return {
+    ...item,
+    qty: String(rolls),
+    unit: "roll",
+    price: match ? String(match.price) : item.price,
+    note: (item.note || "") + ` | Conv: ${item.qty} SF ÷ ${sfPerRoll} = ${rolls} rolls`
+  };
+}
       if (parsedMaterials.length > 0) {
         // NEW: Auto-convert all LF items right after import
         const hasLF = parsedMaterials.some(i => i.unit && i.unit.toLowerCase() === "lf");
