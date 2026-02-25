@@ -79,7 +79,7 @@ const DEFAULT_PRICES = {
   "3/4 T&G OSB Subfloor":    {unit:"sheet",price:44.00, tags:["subfloor","t&g","3/4","floor sheathing","osb floor"]},
   "1/2 OSB Sheathing":        {unit:"sheet",price:20.00, tags:["1/2","osb","sheathing"]},
   // HOUSEWRAP
-  "Housewrap Roll (1000 SF)": {unit:"roll", price:68.00, tags:["housewrap","weather barrier","tyvek","wrap"]},
+  "Housewrap Roll (1000 SF)": {unit:"roll", price:225.00, tags:["housewrap","weather barrier","tyvek","wrap","typar"]},
   // ENGINEERED LUMBER (per piece, priced by depth — adjust length multiplier in notes)
   "1.75x9.5 LVL 16ft":       {unit:"ea",   price:420.00,tags:["lvl","1.75x9","9.5","9-1/2","lvl beam"]},
   "1.75x11.25 LVL 16ft":     {unit:"ea",   price:576.00,tags:["lvl","1.75x11","11.25","11-1/4"]},
@@ -221,11 +221,14 @@ At the END of the array, ALWAYS add at least one summary object like this:
   "estimated_porch_deck_sf": 150,
   "note": "Heated living area 2050 sf + attached garage 400 sf. Porch excluded from heated area."
 }
-
+For housewrap and all sheathing, always give total square feet coverage (SF), never linear feet.
+For plates, fascia, sub-fascia, barge, frieze, and ridge boards, give total linear feet (LF).
+    
 If you can distinguish them clearly, include separate summary objects for different floors or areas, e.g.:
 { "type": "summary", "area": "Main floor", "estimated_sf": 1400, "note": "..." }
 { "type": "summary", "area": "Second floor", "estimated_sf": 650, "note": "..." }
 `;
+  
   
 // ─── SPAN TABLE CALCULATOR ───────────────────────────────────────────────────
 // Based on IRC 2021 / Michigan Residential Code span tables
@@ -1063,78 +1066,77 @@ function EstimateEditor({clients, est, onSave, onCancel, prices, onToast}) {
   let summaryNote = "";
 
   try {
-    // Clean up common markdown junk
     const clean = grokText
       .replace(/```json|```/g, "")
-      .replace(/^[\s\S]*?\[/, "[")   // remove anything before the array
-      .replace(/\][\s\S]*$/, "]")    // remove anything after the array
+      .replace(/^[\s\S]*?\[/, "[")
+      .replace(/\][\s\S]*$/, "]")
       .trim();
 
     const arr = JSON.parse(clean);
 
     if (Array.isArray(arr) && arr.length > 0) {
       arr.forEach(item => {
-        // Normal material item
         if (item.description && item.qty) {
+          // Normal material item
           parsedMaterials.push({
             id: uid(),
             description: item.description || item.name || item.item || "",
             qty: String(item.qty || item.quantity || 1),
             unit: item.unit || "ea",
-            price: String(
-              item.price ||
-              item.unit_price ||
-              item.unitPrice ||
-              smartLookup(item.description || "", prices)?.price ||
-              "0"
-            ),
+            price: String(item.price || item.unit_price || item.unitPrice ||
+              smartLookup(item.description || "", prices)?.price || "0"),
             category: item.category || "Other",
             note: item.note || item.notes || item.location || ""
           });
-        }
-        // Summary object (the new part we care about)
-        else if (item.type === "summary") {
-          // Prefer heated SF → total SF → first available number
-          suggestedSF =
-            String(item.estimated_heated_sf) ||
-            String(item.estimated_total_sf) ||
-            String(item.estimated_sf || "") ||
-            "";
-
+        } else if (item.type === "summary") {
+          suggestedSF = String(item.estimated_heated_sf || item.estimated_total_sf || item.estimated_sf || "");
           summaryNote = item.note || "";
-
-          // Optional: you could collect more fields later (garage, porch, etc.)
         }
       });
 
       if (parsedMaterials.length > 0) {
+        // NEW: Auto-convert all LF items right after import
+        const hasLF = parsedMaterials.some(i => i.unit && i.unit.toLowerCase() === "lf");
+        
         setE(prev => ({
           ...prev,
           items: parsedMaterials,
-          // Auto-fill Total Living SF if we found a good number
-          totalSF: suggestedSF || prev.totalSF,
-          // Optional: add the note to scope or somewhere visible
-          scope: prev.scope
-            ? prev.scope + (summaryNote ? `\n\nGrok SF estimate: ${summaryNote}` : "")
-            : summaryNote
+          totalSF: suggestedSF || prev.totalSF
         }));
 
         let msg = `✓ Imported ${parsedMaterials.length} material items`;
-        if (suggestedSF) {
-          msg += ` — suggested ${suggestedSF} SF (auto-filled)`;
-        }
-        if (summaryNote) {
-          msg += `. Note: ${summaryNote}`;
-        }
+        if (suggestedSF) msg += ` — ${suggestedSF} SF auto-filled`;
+        if (hasLF) msg += `. All LF items auto-converted to 16ft boards.`;
+        
         setGrokMsg(msg);
         setTab("materials");
-      } else {
-        setGrokMsg("Found no valid material items in the JSON.");
+
+        // Auto-convert LF after a tiny delay so state updates
+        if (hasLF) {
+          setTimeout(() => {
+            const currentItems = [...parsedMaterials]; // get latest
+            const updated = currentItems.map(item => {
+              if (item.unit && item.unit.toLowerCase() === "lf") {
+                const boardLen = detectBoardLength(item.description) || 16;
+                const boards = Math.ceil(num(item.qty) / boardLen);
+                const match = smartLookup(item.description, prices);
+                return {
+                  ...item,
+                  qty: String(boards),
+                  unit: "ea",
+                  price: match && num(item.price) === 0 ? String(match.price) : item.price,
+                  note: (item.note || "") + (item.note ? " | " : "") + `Conv: ${item.qty} LF ÷ ${boardLen}ft = ${boards} pcs`
+                };
+              }
+              return item;
+            });
+            setE(prev => ({ ...prev, items: updated }));
+          }, 300);
+        }
       }
     }
   } catch (err) {
-    console.error("JSON parse error:", err);
-    setGrokMsg("Could not parse JSON. Make sure it's a valid array. Error: " + err.message);
+    setGrokMsg("Could not parse JSON. " + err.message);
   }
 }
   function handleSave() {
